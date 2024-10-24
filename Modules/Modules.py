@@ -5,6 +5,7 @@ from typing import Union, List, Optional
 
 from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Positional_Encoding
 from .GRL import GRL
+from .F0_Diffusion import F0_Diffusion
 from .Diffusion import Diffusion
 
 from hificodec.vqvae import VQVAE
@@ -20,9 +21,9 @@ class RectifiedFlowSVS(torch.nn.Module):
 
         self.encoder = Encoder(self.hp)
 
-        self.f0_predictor = F0_Predictor(self.hp)
         self.singer_eliminator = Eliminator(self.hp, self.hp.Singers)
 
+        self.f0_diffusion = F0_Diffusion(self.hp)
         self.diffusion = Diffusion(self.hp)
 
         self.hificodec = hificodec
@@ -55,10 +56,11 @@ class RectifiedFlowSVS(torch.nn.Module):
 
         prediction_singers = self.singer_eliminator(encodings)
 
-        prediction_f0s = self.f0_predictor(
+        f0_flows, prediction_f0_flows, _, _ = self.f0_diffusion(
             encodings= encodings,
+            f0s= f0s,
             lengths= lengths,
-            )   # [Batch, Dec_t]
+            )
 
         flows, prediction_flows, _, _ = self.diffusion(
             encodings= encodings,
@@ -67,7 +69,7 @@ class RectifiedFlowSVS(torch.nn.Module):
             lengths= lengths,
             )
 
-        return flows, prediction_flows, prediction_f0s, prediction_singers
+        return flows, prediction_flows, f0_flows, prediction_f0_flows, prediction_singers
     
     def Inference(
         self,
@@ -90,9 +92,10 @@ class RectifiedFlowSVS(torch.nn.Module):
             languages= languages
             )    # [Batch, Enc_d, Enc_t]
 
-        f0s = self.f0_predictor(
+        f0s = self.f0_diffusion.Inference(
             encodings= encodings,
             lengths= lengths,
+            steps= diffusion_steps,
             )   # [Batch, Dec_t]
 
         latents = self.diffusion.Inference(
@@ -204,58 +207,6 @@ class Encoder(torch.nn.Module):
             encodings = block(encodings, lengths)
 
         return encodings
-
-class F0_Predictor(torch.nn.Module):
-    def __init__(
-        self,
-        hyper_parameters: Namespace,
-        ):
-        super().__init__()
-        self.hp = hyper_parameters
- 
-        self.positional_encoding = Positional_Encoding(
-            num_embeddings= self.hp.Durations,
-            embedding_dim= self.hp.Encoder.Size
-            )
-
-        self.blocks: List[FFT_Block] = torch.nn.ModuleList([
-            FFT_Block(
-                channels= self.hp.Encoder.Size,
-                num_head= self.hp.F0_Predictor.Transformer.Head,
-                residual_conv_stack= self.hp.F0_Predictor.Transformer.Residual_Conv.Stack,
-                residual_conv_kernel_size= self.hp.F0_Predictor.Transformer.Residual_Conv.Kernel_Size,
-                ffn_kernel_size= self.hp.F0_Predictor.Transformer.FFN.Kernel_Size,
-                residual_conv_dropout_rate= self.hp.F0_Predictor.Transformer.Residual_Conv.Dropout_Rate,
-                ffn_dropout_rate= self.hp.F0_Predictor.Transformer.FFN.Dropout_Rate,
-                )
-            for _ in range(self.hp.F0_Predictor.Transformer.Stack)
-            ])  # real type: torch.nn.ModuleList[FFT_BLock]
-        
-        self.projection = Conv_Init(torch.nn.Conv1d(
-            in_channels= self.hp.Encoder.Size,
-            out_channels= 1,
-            kernel_size= 1
-            ), w_init_gain= 'softplus')
-    
-    def forward(
-        self,
-        encodings: torch.Tensor,
-        lengths: torch.Tensor,
-        ) -> torch.Tensor:
-        '''
-        encodings: [Batch, Enc_d, Dec_t]        
-        lengths: [Batch], latent length
-        '''
-        encodings = encodings.detach() + self.positional_encoding(
-            position_ids= torch.arange(encodings.size(2), device= encodings.device)[None]
-            ).mT    # using detach.
-
-        for block in self.blocks:
-            encodings = block(encodings, lengths)
-
-        f0s = self.projection(encodings)[:, 0, :] # [Batch, Dec_t]
-
-        return torch.nn.functional.softplus(f0s)
 
 class Eliminator(torch.nn.Module): 
     def __init__(
