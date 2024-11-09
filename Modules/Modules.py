@@ -5,7 +5,6 @@ from typing import Union, List, Optional
 
 from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Positional_Encoding
 from .GRL import GRL
-from .F0_Diffusion import F0_Diffusion
 from .Diffusion import Diffusion
 
 from hificodec.vqvae import VQVAE
@@ -23,7 +22,6 @@ class RectifiedFlowSVS(torch.nn.Module):
 
         self.singer_eliminator = Eliminator(self.hp, self.hp.Singers)
 
-        self.f0_diffusion = F0_Diffusion(self.hp)
         self.diffusion = Diffusion(self.hp)
 
         self.hificodec = hificodec
@@ -55,26 +53,13 @@ class RectifiedFlowSVS(torch.nn.Module):
 
         prediction_singers = self.singer_eliminator(encodings)
 
-<<<<<<< HEAD
-        f0_flows, prediction_f0_flows, _, _ = self.f0_diffusion(
-            encodings= encodings,
-            f0s= f0s,
-            lengths= lengths,
-            )
-
-=======
->>>>>>> origin/f0_remove
         flows, prediction_flows, _, _ = self.diffusion(
             encodings= encodings,
             latents= latents,
             lengths= lengths,
             )
 
-<<<<<<< HEAD
-        return flows, prediction_flows, f0_flows, prediction_f0_flows, prediction_singers
-=======
         return flows, prediction_flows, prediction_singers
->>>>>>> origin/f0_remove
     
     def Inference(
         self,
@@ -97,15 +82,6 @@ class RectifiedFlowSVS(torch.nn.Module):
             languages= languages
             )    # [Batch, Enc_d, Enc_t]
 
-<<<<<<< HEAD
-        f0s = self.f0_diffusion.Inference(
-            encodings= encodings,
-            lengths= lengths,
-            steps= diffusion_steps,
-            )   # [Batch, Dec_t]
-
-=======
->>>>>>> origin/f0_remove
         latents = self.diffusion.Inference(
             encodings= encodings,
             lengths= lengths,
