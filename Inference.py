@@ -109,12 +109,6 @@ class Inferencer:
             audio[:length]
             for audio, length in zip(prediction_audios.clamp(-1.0, 1.0).cpu().numpy(), audio_lengths)
             ]
-        
-        print(token_lengths)
-        print(latent_code_lengths)
-        print(audio_lengths)
-        print(prediction_alignments.shape)
-        print(prediction_alignments[0])
 
         return prediction_audios
 

@@ -26,7 +26,8 @@ Encoder:
             Kernel_Size: 5
             Dropout_Rate: 0.1
 
-F0_Predictor:
+F0_Diffusion:
+    Size: 256
     Transformer:
         Stack: 6
         Head: 2
@@ -38,6 +39,7 @@ F0_Predictor:
             Stack: 2
             Kernel_Size: 5
             Dropout_Rate: 0.1
+    Network_Prediction: 'Flow'   # 'Flow', 'Noise'
 
 Eliminator:
     Size: 256

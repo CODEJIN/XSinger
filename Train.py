@@ -113,6 +113,9 @@ class Trainer:
         token_dict = yaml.load(open(self.hp.Token_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
         singer_dict = yaml.load(open(self.hp.Singer_Info_Path, 'r', encoding= 'utf-8-sig'), Loader=yaml.Loader)
         language_dict = yaml.load(open(self.hp.Language_Info_Path, 'r', encoding= 'utf-8-sig'), Loader=yaml.Loader)
+        f0_dict = yaml.load(open(self.hp.F0_Info_Path, 'r', encoding= 'utf-8-sig'), Loader=yaml.Loader)
+        self.f0_min = min([x['Min'] for x in f0_dict.values()])
+        self.f0_max = max([x['Max'] for x in f0_dict.values()])
         
         train_dataset = Dataset(
             token_dict= token_dict,
@@ -245,9 +248,10 @@ class Trainer:
         latent_codes: torch.IntTensor
         ):
         loss_dict = {}
+        f0s = (f0s - self.f0_min) / (self.f0_max - self.f0_min) * 2.0 - 1
 
         with self.accelerator.accumulate(self.model_dict['RectifiedFlowSVS']):
-            flows, prediction_flows, prediction_f0s, prediction_singers = self.model_dict['RectifiedFlowSVS'](
+            flows, prediction_flows, f0_flows, prediction_f0_flows, prediction_singers = self.model_dict['RectifiedFlowSVS'](
                 tokens= tokens,
                 notes= notes,
                 lyric_durations= lyric_durations,
@@ -263,9 +267,9 @@ class Trainer:
                 prediction_flows,
                 flows,
                 )
-            loss_dict['F0'] = self.criterion_dict['MSE'](
-                (prediction_f0s + 1).log(),
-                (f0s + 1).log(),
+            loss_dict['F0_Diffusion'] = self.criterion_dict['MSE'](
+                prediction_f0_flows,
+                f0_flows,
                 )
             loss_dict['Singer'] = self.criterion_dict['CE'](
                 input= prediction_singers,
@@ -275,7 +279,7 @@ class Trainer:
             self.optimizer_dict['RectifiedFlowSVS'].zero_grad()
             self.accelerator.backward(
                 loss_dict['Diffusion'] +
-                loss_dict['F0'] # +
+                loss_dict['F0_Diffusion'] # +
                 # loss_dict['Singer']
                 )
 
@@ -355,8 +359,9 @@ class Trainer:
         latent_codes: torch.IntTensor
         ):
         loss_dict = {}
+        f0s = (f0s - self.f0_min) / (self.f0_max - self.f0_min) * 2.0 - 1
 
-        flows, prediction_flows, prediction_f0s, prediction_singers = self.model_dict['RectifiedFlowSVS_EMA'](
+        flows, prediction_flows, f0_flows, prediction_f0_flows, prediction_singers = self.model_dict['RectifiedFlowSVS_EMA'](
             tokens= tokens,
             notes= notes,
             lyric_durations= lyric_durations,
@@ -372,9 +377,9 @@ class Trainer:
             prediction_flows,
             flows,
             )
-        loss_dict['F0'] = self.criterion_dict['MSE'](
-            (prediction_f0s + 1).log(),
-            (f0s + 1).log(),
+        loss_dict['F0_Diffusion'] = self.criterion_dict['MSE'](
+            prediction_f0_flows,
+            f0_flows,
             )
         loss_dict['Singer'] = self.criterion_dict['CE'](
             input= prediction_singers,
@@ -395,7 +400,7 @@ class Trainer:
             desc='[Evaluation]',
             total= math.ceil(len(self.dataloader_dict['Eval'].dataset) / self.hp.Train.Batch_Size / self.num_gpus)
             ):
-            alignments = self.Evaluation_Step(
+            self.Evaluation_Step(
                 tokens= tokens,
                 notes= notes,
                 lyric_durations= lyric_durations,
@@ -434,6 +439,7 @@ class Trainer:
                     singers= singers[index, None],
                     languages= languages[index, None],
                     )
+                prediction_f0s = (prediction_f0s + 1.0) * 2.0 * (self.f0_max - self.f0_min) + self.f0_min
 
             length = lengths[index].item()
             audio_length = length * self.hp.Sound.Hop_Size
@@ -526,6 +532,7 @@ class Trainer:
             singers= singers,
             languages= languages,
             )
+        prediction_f0s = (prediction_f0s + 1.0) * 2.0 * (self.f0_max - self.f0_min) + self.f0_min
         audio_lengths = [
             length * self.hp.Sound.Hop_Size
             for length in lengths
