@@ -38,7 +38,6 @@ class RectifiedFlowSVS(torch.nn.Module):
         lengths: torch.IntTensor,
         singers: torch.IntTensor,
         languages: torch.IntTensor,
-        f0s: torch.FloatTensor,
         latent_codes: torch.LongTensor,
         ):
         with torch.no_grad():
@@ -56,20 +55,26 @@ class RectifiedFlowSVS(torch.nn.Module):
 
         prediction_singers = self.singer_eliminator(encodings)
 
+<<<<<<< HEAD
         f0_flows, prediction_f0_flows, _, _ = self.f0_diffusion(
             encodings= encodings,
             f0s= f0s,
             lengths= lengths,
             )
 
+=======
+>>>>>>> origin/f0_remove
         flows, prediction_flows, _, _ = self.diffusion(
             encodings= encodings,
-            f0s= f0s,
             latents= latents,
             lengths= lengths,
             )
 
+<<<<<<< HEAD
         return flows, prediction_flows, f0_flows, prediction_f0_flows, prediction_singers
+=======
+        return flows, prediction_flows, prediction_singers
+>>>>>>> origin/f0_remove
     
     def Inference(
         self,
@@ -92,15 +97,17 @@ class RectifiedFlowSVS(torch.nn.Module):
             languages= languages
             )    # [Batch, Enc_d, Enc_t]
 
+<<<<<<< HEAD
         f0s = self.f0_diffusion.Inference(
             encodings= encodings,
             lengths= lengths,
             steps= diffusion_steps,
             )   # [Batch, Dec_t]
 
+=======
+>>>>>>> origin/f0_remove
         latents = self.diffusion.Inference(
             encodings= encodings,
-            f0s= f0s,
             lengths= lengths,
             steps= diffusion_steps,
             )
@@ -111,7 +118,7 @@ class RectifiedFlowSVS(torch.nn.Module):
         latent_codes = torch.stack(latent_codes, 2)
         audios = self.hificodec(latent_codes)[:, 0, :]
 
-        return audios, f0s
+        return audios
 
     def train(self, mode: bool= True):
         super().train(mode= mode)

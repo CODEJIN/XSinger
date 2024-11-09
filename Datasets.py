@@ -38,14 +38,6 @@ def Duration_Stack(durations: List[List[int]], max_length: Optional[int]= None):
         )
     return durations
 
-def F0_Stack(f0s: List[np.ndarray], max_length: int= None):
-    max_f0_length = max_length or max([f0.shape[0] for f0 in f0s])
-    f0s = np.stack(
-        [np.pad(f0, [0, max_f0_length - f0.shape[0]], constant_values= 0.0) for f0 in f0s],
-        axis= 0
-        )
-    return f0s
-
 def Latent_Stack(latents: List[np.ndarray], max_length: Optional[int]= None):
     max_latent_length = max_length or max([latent.shape[1] for latent in latents])
     latents = np.stack(
@@ -108,10 +100,9 @@ class Dataset(torch.utils.data.Dataset):
         note_duration = pattern_dict['Note_Duration_Expand']
         singer = self.singer_dict[pattern_dict['Singer']]
         language = self.language_dict[pattern_dict['Language']]
-        f0 = pattern_dict['F0']
         latent_code = pattern_dict['Latent_Code']
 
-        return token, note, lyric_duration, note_duration, singer, language, f0, latent_code
+        return token, note, lyric_duration, note_duration, singer, language, latent_code
 
     def __len__(self):
         return len(self.patterns)
@@ -191,7 +182,7 @@ class Collater:
         self.hop_size = hop_size
 
     def __call__(self, batch):
-        tokens, notes, lyric_durations, note_durations, singers, languages, f0s, latent_codes = zip(*batch)
+        tokens, notes, lyric_durations, note_durations, singers, languages, latent_codes = zip(*batch)
 
         offsets = []
         for token in tokens:
@@ -225,10 +216,6 @@ class Collater:
             ])
         singers = np.array(singers)
         languages = np.array(languages)
-        f0s = F0_Stack([
-            f0[offset:offset+self.pattern_length]
-            for f0, offset in zip(f0s, offsets)
-            ])
         latent_codes = Latent_Stack([
             latent_code[:, offset:offset+self.pattern_length]
             for latent_code, offset in zip(latent_codes, offsets)
@@ -241,10 +228,9 @@ class Collater:
         lengths = torch.IntTensor([self.pattern_length] * len(batch))
         singers = torch.IntTensor(singers)  # [Batch]
         languages = torch.IntTensor(languages)  # [Batch]
-        f0s = torch.FloatTensor(f0s)
         latent_codes = torch.LongTensor(latent_codes)  # [Batch, Latent_Code_n, Latent_t]
         
-        return tokens, notes, lyric_durations, note_durations, lengths, singers, languages, f0s, latent_codes
+        return tokens, notes, lyric_durations, note_durations, lengths, singers, languages, latent_codes
 
 class Inference_Collater:
     def __init__(self,

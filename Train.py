@@ -11,6 +11,7 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 from scipy.io import wavfile
 from accelerate import Accelerator
+from accelerate import DistributedDataParallelKwargs
 from Logger import Logger
 from typing import List
 
@@ -60,7 +61,8 @@ class Trainer:
         self.accelerator = Accelerator(
             split_batches= True,
             mixed_precision= 'fp16' if self.hp.Use_Mixed_Precision else 'no',   # no, fp16, bf16, fp8
-            gradient_accumulation_steps= self.hp.Train.Accumulated_Gradient_Step
+            gradient_accumulation_steps= self.hp.Train.Accumulated_Gradient_Step,
+            kwargs_handlers= [DistributedDataParallelKwargs(find_unused_parameters= True), ]
             )
 
         if not torch.cuda.is_available():
@@ -244,14 +246,13 @@ class Trainer:
         lengths: torch.IntTensor,
         singers: torch.IntTensor,
         languages: torch.IntTensor,
-        f0s: torch.FloatTensor,
         latent_codes: torch.IntTensor
         ):
         loss_dict = {}
         f0s = (f0s - self.f0_min) / (self.f0_max - self.f0_min) * 2.0 - 1
 
         with self.accelerator.accumulate(self.model_dict['RectifiedFlowSVS']):
-            flows, prediction_flows, f0_flows, prediction_f0_flows, prediction_singers = self.model_dict['RectifiedFlowSVS'](
+            flows, prediction_flows, prediction_singers = self.model_dict['RectifiedFlowSVS'](
                 tokens= tokens,
                 notes= notes,
                 lyric_durations= lyric_durations,
@@ -259,17 +260,12 @@ class Trainer:
                 lengths= lengths,
                 singers= singers,
                 languages= languages,
-                f0s= f0s,
                 latent_codes= latent_codes
                 )
             
             loss_dict['Diffusion'] = self.criterion_dict['MSE'](
                 prediction_flows,
                 flows,
-                )
-            loss_dict['F0_Diffusion'] = self.criterion_dict['MSE'](
-                prediction_f0_flows,
-                f0_flows,
                 )
             loss_dict['Singer'] = self.criterion_dict['CE'](
                 input= prediction_singers,
@@ -278,8 +274,7 @@ class Trainer:
 
             self.optimizer_dict['RectifiedFlowSVS'].zero_grad()
             self.accelerator.backward(
-                loss_dict['Diffusion'] +
-                loss_dict['F0_Diffusion'] # +
+                loss_dict['Diffusion'] # +
                 # loss_dict['Singer']
                 )
 
@@ -290,7 +285,10 @@ class Trainer:
                     )
                 
             self.optimizer_dict['RectifiedFlowSVS'].step()            
-            self.model_dict['RectifiedFlowSVS_EMA'].update_parameters(self.model_dict['RectifiedFlowSVS'])
+            if self.num_gpus > 1:
+                self.model_dict['RectifiedFlowSVS_EMA'].module.update_parameters(self.model_dict['RectifiedFlowSVS'])
+            else:
+                self.model_dict['RectifiedFlowSVS_EMA'].update_parameters(self.model_dict['RectifiedFlowSVS'])
 
             self.steps += 1
             self.tqdm.update(1)
@@ -299,7 +297,7 @@ class Trainer:
             self.scalar_dict['Train']['Loss/{}'.format(tag)] += loss.item()
 
     def Train_Epoch(self):
-        for tokens, notes, lyric_durations, note_durations, lengths, singers, languages, f0s, latent_codes in self.dataloader_dict['Train']:
+        for tokens, notes, lyric_durations, note_durations, lengths, singers, languages, latent_codes in self.dataloader_dict['Train']:
             self.Train_Step(
                 tokens= tokens,
                 notes= notes,
@@ -308,7 +306,6 @@ class Trainer:
                 lengths= lengths,
                 singers= singers,
                 languages= languages,
-                f0s= f0s,
                 latent_codes= latent_codes
                 )
 
@@ -355,13 +352,12 @@ class Trainer:
         lengths: torch.IntTensor,
         singers: torch.IntTensor,
         languages: torch.IntTensor,
-        f0s: torch.FloatTensor,
         latent_codes: torch.IntTensor
         ):
         loss_dict = {}
         f0s = (f0s - self.f0_min) / (self.f0_max - self.f0_min) * 2.0 - 1
 
-        flows, prediction_flows, f0_flows, prediction_f0_flows, prediction_singers = self.model_dict['RectifiedFlowSVS_EMA'](
+        flows, prediction_flows, prediction_singers = self.model_dict['RectifiedFlowSVS_EMA'](
             tokens= tokens,
             notes= notes,
             lyric_durations= lyric_durations,
@@ -369,17 +365,12 @@ class Trainer:
             lengths= lengths,
             singers= singers,
             languages= languages,
-            f0s= f0s,
             latent_codes= latent_codes
             )
         
         loss_dict['Diffusion'] = self.criterion_dict['MSE'](
             prediction_flows,
             flows,
-            )
-        loss_dict['F0_Diffusion'] = self.criterion_dict['MSE'](
-            prediction_f0_flows,
-            f0_flows,
             )
         loss_dict['Singer'] = self.criterion_dict['CE'](
             input= prediction_singers,
@@ -395,7 +386,7 @@ class Trainer:
         for model in self.model_dict.values():
             model.eval()
 
-        for step, (tokens, notes, lyric_durations, note_durations, lengths, singers, languages, f0s, latent_codes) in tqdm(
+        for step, (tokens, notes, lyric_durations, note_durations, lengths, singers, languages, latent_codes) in tqdm(
             enumerate(self.dataloader_dict['Eval'], 1),
             desc='[Evaluation]',
             total= math.ceil(len(self.dataloader_dict['Eval'].dataset) / self.hp.Train.Batch_Size / self.num_gpus)
@@ -408,7 +399,6 @@ class Trainer:
                 lengths= lengths,
                 singers= singers,
                 languages= languages,
-                f0s= f0s,
                 latent_codes= latent_codes
                 )
 
@@ -430,7 +420,7 @@ class Trainer:
                     target_audios = self.model_dict['RectifiedFlowSVS_EMA'].module.hificodec(latent_codes[index, None].mT)[:, 0]
                     inference_func = self.model_dict['RectifiedFlowSVS_EMA'].Inference
 
-                prediction_audios, prediction_f0s = inference_func(
+                prediction_audios = inference_func(
                     tokens= tokens[index, None],
                     notes= notes[index, None],
                     lyric_durations= lyric_durations[index, None],
@@ -453,14 +443,9 @@ class Trainer:
             target_audio = target_audio.cpu().numpy()
             prediction_audio = prediction_audio.cpu().numpy()
 
-            target_f0 = f0s[index, :length].cpu().numpy() 
-            prediction_f0 = prediction_f0s[0, :length].cpu().numpy()
-
             image_dict = {
                 'Mel/Target': (target_mel, None, 'auto', None, None, None),
                 'Mel/Prediction': (prediction_mel, None, 'auto', None, None, None),
-                'F0/Target': (target_f0, None, 'auto', None, None, None),
-                'F0/Prediction': (prediction_f0, None, 'auto', None, None, None),
                 }
             audio_dict = {
                 'Audio/Target': (target_audio, self.hp.Sound.Sample_Rate),
@@ -523,7 +508,7 @@ class Trainer:
         else:
             inference_func = self.model_dict['RectifiedFlowSVS_EMA'].Inference
 
-        prediction_audios, prediction_f0s = inference_func(
+        prediction_audios = inference_func(
             tokens= tokens,
             notes= notes,
             lyric_durations= lyric_durations,
@@ -546,11 +531,6 @@ class Trainer:
             audio[:length]
             for audio, length in zip(prediction_audios.cpu().numpy(), audio_lengths)
             ]
-        
-        prediction_f0s = [
-            f0[:length]
-            for f0, length in zip(prediction_f0s.cpu().numpy(), lengths)
-            ]
 
         files = []
         for index in range(tokens.size(0)):
@@ -564,29 +544,22 @@ class Trainer:
         for index, (
             mel,
             audio,
-            f0,
             lyric,
             file
             ) in enumerate(zip(
             prediction_mels,
             prediction_audios,
-            prediction_f0s,
             lyrics,
             files
             )):
             title = 'Lyric: {}'.format(lyric if len(lyric) < 90 else lyric[:90])
             new_figure = plt.figure(figsize=(20, 5 * 3), dpi=100)
 
-            ax = plt.subplot2grid((3, 1), (0, 0))
+            ax = plt.subplot2grid((2, 1), (0, 0))
             plt.imshow(mel, aspect='auto', origin='lower')
             plt.title(f'Prediction Mel  {title}')
-            plt.colorbar(ax= ax)
-            ax = plt.subplot2grid((3, 1), (1, 0))
-            plt.plot(f0)
-            plt.title('Prediction F0    {}'.format(title))
-            plt.margins(x= 0)
-            plt.colorbar(ax= ax)
-            ax = plt.subplot2grid((3, 1), (2, 0))
+            plt.colorbar(ax= ax)            
+            ax = plt.subplot2grid((2, 1), (1, 0))
             plt.plot(audio)
             plt.title('Prediction Audio    {}'.format(title))
             plt.margins(x= 0)
@@ -653,16 +626,12 @@ class Trainer:
         if self.accelerator.is_main_process:
             logging.info('Checkpoint loaded at {} steps.'.format(self.steps))
 
-    def Save_Checkpoint(self):        
-        if not self.accelerator.is_main_process:
-            return
-        
+    def Save_Checkpoint(self):
         os.makedirs(self.hp.Checkpoint_Path, exist_ok= True)
         checkpoint_path = os.path.join(self.hp.Checkpoint_Path, 'S_{}'.format(self.steps).replace('\\', '/'))
 
         self.accelerator.wait_for_everyone()
         self.accelerator.save_state(checkpoint_path, safe_serialization= False) # sefetensor cannot use because of shared tensor problem
-        # self.accelerator.save_state(checkpoint_path)
 
         logging.info('Checkpoint saved at {} steps.'.format(self.steps))
 

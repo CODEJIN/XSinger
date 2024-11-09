@@ -23,7 +23,6 @@ class Diffusion(torch.nn.Module):
     def forward(
         self,
         encodings: torch.FloatTensor,
-        f0s: torch.FloatTensor,
         latents: torch.FloatTensor,
         lengths: torch.IntTensor
         ):
@@ -43,7 +42,6 @@ class Diffusion(torch.nn.Module):
         network_output = self.network(
             noised_latents= noised_latents,
             encodings= encodings,
-            f0s= f0s,
             lengths= lengths,
             diffusion_steps= cosmap_schedule_times[:, 0, 0] # [Batch]
             )
@@ -64,7 +62,6 @@ class Diffusion(torch.nn.Module):
     def Inference(
         self,
         encodings: torch.FloatTensor,
-        f0s: torch.FloatTensor,
         lengths: torch.IntTensor,
         steps: int
         ):
@@ -82,7 +79,6 @@ class Diffusion(torch.nn.Module):
             network_output = self.network(
                 noised_latents= noised_latents,
                 encodings= encodings,
-                f0s= f0s,
                 lengths= lengths,
                 diffusion_steps= cosmap_schedule_times[:, 0, 0] # [Batch]
                 )
@@ -138,20 +134,6 @@ class Network(torch.nn.Module):
                 kernel_size= 1,
                 ), w_init_gain= 'linear')
             )
-
-        self.f0_ffn = torch.nn.Sequential(
-            Lambda(lambda x: x[:, :, None]),
-            Conv_Init(torch.nn.Linear(
-                in_features= 1,
-                out_features= self.hp.Diffusion.Size * 4,
-                ), w_init_gain= 'gelu'),
-            torch.nn.GELU(approximate= 'tanh'),
-            Conv_Init(torch.nn.Linear(
-                in_features= self.hp.Diffusion.Size * 4,
-                out_features= self.hp.Diffusion.Size,
-                ), w_init_gain= 'linear'),
-            Lambda(lambda x: x.mT)
-            )
         
         self.step_ffn = torch.nn.Sequential(
             Step_Embedding(
@@ -204,22 +186,19 @@ class Network(torch.nn.Module):
         self,
         noised_latents: torch.Tensor,
         encodings: torch.Tensor,
-        f0s: torch.Tensor,
         lengths: torch.Tensor,
         diffusion_steps: torch.Tensor
         ):
         '''
         noised_latents: [Batch, Latent_d, Dec_t]
         encodings: [Batch, Enc_d, Dec_t]
-        f0s: [Batch, Dec_t]
         diffusion_steps: [Batch]
         '''
         x = self.prenet(noised_latents)
         encodings = self.encoding_ffn(encodings)
-        f0s = self.f0_ffn(f0s)
         diffusion_steps = self.step_ffn(diffusion_steps) # [Batch, Res_d, 1]
 
-        x = x + encodings + f0s + diffusion_steps + self.positional_encoding(
+        x = x + encodings + diffusion_steps + self.positional_encoding(
             position_ids= torch.arange(x.size(2), device= encodings.device)[None]
             ).mT
 
