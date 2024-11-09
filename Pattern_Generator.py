@@ -10,12 +10,19 @@ from typing import List, Tuple
 from argparse import Namespace  # for type
 import torch
 from itertools import cycle
+from collections import deque
 from typing import Dict, Union
 
 from Phonemize import Phonemize, Language, _Korean_Syllablize, _Chinese_Syllablize, _Japanese_Syllable_to_IPA
 
 from hificodec.vqvae import VQVAE
 from Arg_Parser import Recursive_Parse
+
+import matplotlib as mpl
+# 유니코드 깨짐현상 해결
+mpl.rcParams['axes.unicode_minus'] = False
+# 나눔고딕 폰트 적용
+plt.rcParams["font.family"] = 'NanumGothic'
 
 logging.basicConfig(
     level=logging.INFO, stream=sys.stdout,
@@ -157,34 +164,17 @@ def AIHub_Mediazen(
             continue
 
         audio = librosa.util.normalize(audio) * 0.95
-        music = G2P_Lyric(music)
+        music = Korean_G2P_Lyric(music)
         if music is None:
             continue
-        lyrics, notes, lyric_durations, note_durations = Convert_Feature_Based_Music(
+        music = Convert_Feature_Based_Duration(
             music= music,
             sample_rate= hyper_paramters.Sound.Sample_Rate,
-            hop_size= hyper_paramters.Sound.Hop_Size,
-            verbose= verbose
+            hop_size= hyper_paramters.Sound.Hop_Size
             )
-        if lyrics is None:
-            continue
 
-        lyrics_expand, notes_expand, lyric_durations_expand, note_durations_expand = Expand_by_Duration(
-            lyrics= lyrics,
-            notes= notes,
-            lyric_durations= lyric_durations,
-            note_durations= note_durations
-            )
-        
         is_generated = Pattern_File_Generate(
-            lyric= lyrics,
-            note= notes,
-            lyric_duration= lyric_durations,
-            note_duration= note_durations,
-            lyric_expand= lyrics_expand,
-            note_expand= notes_expand,
-            lyric_duration_expand= lyric_durations_expand,
-            note_duration_expand= note_durations_expand,
+            music= music,
             audio= audio,
             music_label= music_label,
             singer= singer,
@@ -297,33 +287,18 @@ def CSD_Fix(
             continue
 
         audio = librosa.util.normalize(audio) * 0.95
-        music = G2P_Lyric(music)
+        music = Korean_G2P_Lyric(music)
         if music is None:
             continue
-        lyrics, notes, lyric_durations, note_durations = Convert_Feature_Based_Music(
+        
+        music = Convert_Feature_Based_Duration(
             music= music,
             sample_rate= hyper_paramters.Sound.Sample_Rate,
-            hop_size= hyper_paramters.Sound.Hop_Size,
-            verbose= verbose
-            )
-        if lyrics is None:
-            continue
-        lyrics_expand, notes_expand, lyric_durations_expand, note_durations_expand = Expand_by_Duration(
-            lyrics= lyrics,
-            notes= notes,
-            lyric_durations= lyric_durations,
-            note_durations= note_durations
+            hop_size= hyper_paramters.Sound.Hop_Size
             )
 
         Pattern_File_Generate(
-            lyric= lyrics,
-            note= notes,
-            lyric_duration= lyric_durations,
-            note_duration= note_durations,
-            lyric_expand= lyrics_expand,
-            note_expand= notes_expand,
-            lyric_duration_expand= lyric_durations_expand,
-            note_duration_expand= note_durations_expand,
+            music= music,
             audio= audio,
             music_label= music_label,
             singer= 'CSD',
@@ -373,7 +348,6 @@ def CSD_Eng_Fix(
         if os.path.exists(pattern_path) or os.path.exists(os.path.join(f'./note_error/CSD/CSD/{music_label}.png')):
             continue
 
-
         midi_df = pd.read_csv(midi_path)
         lyrics = [
             line.strip().split('\t')[0]
@@ -382,49 +356,34 @@ def CSD_Eng_Fix(
         assert len(lyrics) == len(midi_df), f'There is a lyric data has a problem in: \'{lyric_path}\', lyric length: {len(lyrics)}, midi length: {len(midi_df)}'
         midi_df['syllable'] = lyrics
 
-        musics = []
+        music = []
         last_end_time = 0.0
         for _, row in midi_df.iterrows():
-            if last_end_time != row['start']:
-                musics.append((row['start'] - last_end_time, '<X>', 0))
+            if last_end_time < row['start']:
+                music.append((row['start'] - last_end_time, '<X>', 0))
+            elif last_end_time > row['start']:
+                row['start'] = last_end_time
 
-            musics.append((row['end'] - row['start'], row['syllable'], row['pitch']))
+            music.append((row['end'] - row['start'], row['syllable'], row['pitch']))
             last_end_time = row['end']
 
-        audio, _ = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)
-        audio = librosa.util.normalize(audio) * 0.95
-
-        # print(musics)
-        musics = Phoneme_Split(musics)
-        
-        lyrics, notes, lyric_durations, note_durations = Convert_Feature_Based_Music(
-            music= musics,
+        music = English_Phoneme_Split(music)
+        music = Convert_Feature_Based_Duration(
+            music= music,
             sample_rate= hyper_paramters.Sound.Sample_Rate,
-            hop_size= hyper_paramters.Sound.Hop_Size,
-            verbose= verbose
+            hop_size= hyper_paramters.Sound.Hop_Size
             )
         
-        if lyrics is None:
-            continue
-        lyrics_expand, notes_expand, lyric_durations_expand, note_durations_expand = Expand_by_Duration(
-            lyrics= lyrics,
-            notes= notes,
-            lyric_durations= lyric_durations,
-            note_durations= note_durations
-            )
-        
-        audio = audio[:len(lyric_durations_expand) * hyper_paramters.Sound.Hop_Size]
-
+        audio, _ = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)        
+        audio = audio[:int(sum([x[0] for x in music]) * hyper_paramters.Sound.Sample_Rate)]
+        music_length = sum([x[0] for x in music]) * hyper_paramters.Sound.Hop_Size
+        audio_length = audio.shape[0]
+        if music_length < audio_length:
+            audio = audio[:music_length]
+        audio = librosa.util.normalize(audio) * 0.95
         
         Pattern_File_Generate(
-            lyric= lyrics,
-            note= notes,
-            lyric_duration= lyric_durations,
-            note_duration= note_durations,
-            lyric_expand= lyrics_expand,
-            note_expand= notes_expand,
-            lyric_duration_expand= lyric_durations_expand,
-            note_duration_expand= note_durations_expand,
+            music= music,
             audio= audio,
             music_label= music_label,
             singer= 'CSD',
@@ -478,7 +437,7 @@ def M4Singer(
             ]):
             continue
 
-        lyrics, notes, lyric_durations, note_durations, audios = [], [], [], [], []
+        musics_concat, audios_concat = [], []
         for wav_path in wav_paths:
             midi_path = wav_path.replace('.wav', '.mid')
             tg_path = wav_path.replace('.wav', '.TextGrid')
@@ -737,19 +696,19 @@ def M4Singer(
                     for textgrid in textgrid_list:
                         _, _, textgrid_duration, chinese_character, ipa_phoneme = textgrid
                         if chinese_character == '<X>':
-                            musics.append((textgrid_duration, ipa_phoneme, 0))                
+                            musics.append((textgrid_duration, ipa_phoneme, 0, chinese_character))                
                 elif len(music_list) == 1 and len(textgrid_list) == 1:
                     _, _, music_duration, note = music_list[0]
-                    _, _, _, _, ipa_phoneme = textgrid_list[0]
-                    musics.append((music_duration, ipa_phoneme, note))
+                    _, _, _, chinese_character, ipa_phoneme = textgrid_list[0]
+                    musics.append((music_duration, ipa_phoneme, note, chinese_character))
                 elif len(music_list) == 1 and len(textgrid_list) > 1:
                     _, _, music_duration, note = music_list[0]
                     for textgrid in textgrid_list:
                         _, _, textgrid_duration, chinese_character, ipa_phoneme = textgrid
                         if chinese_character == '<X>' and len(musics) > 0:
-                            musics[-1] = ((musics[-1][0] + textgrid_duration, musics[-1][1], musics[-1][2]))
+                            musics[-1] = ((musics[-1][0] + textgrid_duration, musics[-1][1], musics[-1][2], musics[-1][3]))
                         else:
-                            musics.append((textgrid_duration, ipa_phoneme, note))
+                            musics.append((textgrid_duration, ipa_phoneme, note, chinese_character))
                 elif len(music_list) > 1 and len(textgrid_list) == 1:
                     _, _, _, chinese_character, (onset, nucleus, coda) = textgrid_list[0]
                     
@@ -775,22 +734,23 @@ def M4Singer(
                         if index == 0: ipa_phoneme = (onset, nucleus, [])
                         elif index == len(music) - 1: ipa_phoneme = ([], nucleus, coda)
                         else: ipa_phoneme = ([], nucleus, [])   # middle
-                        musics.append((music_duration, ipa_phoneme, note))
+                        musics.append((music_duration, ipa_phoneme, note, chinese_character))
 
-            lyric, note, lyric_duration, note_duration = Convert_Feature_Based_Music(
+            musics = Convert_Feature_Based_Duration(
                 music= musics,
                 sample_rate= hyper_paramters.Sound.Sample_Rate,
-                hop_size= hyper_paramters.Sound.Hop_Size,
-                verbose= verbose
+                hop_size= hyper_paramters.Sound.Hop_Size
                 )
-            if lyric is None:
-                logging.warning(f'there is an error in\'{wav_path}\'. This pattern will is skipped.')
-                continue
+            musics = [x for x in musics if x[0] > 0 or x[3] != '<X>']
+
+            if any([x[0] == 0 for x in musics]):
+                print(musics)
+                assert False
 
             audio = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)[0]
             audio = audio[:audio.shape[0] - (audio.shape[0] % hyper_paramters.Sound.Hop_Size)]
-            
-            music_length = sum(lyric_duration) * hyper_paramters.Sound.Hop_Size
+
+            music_length = sum([x[0] for x in musics]) * hyper_paramters.Sound.Hop_Size
             audio_length = audio.shape[0]
 
             if music_length < audio_length:
@@ -798,64 +758,78 @@ def M4Singer(
             elif music_length > audio_length:
                 cut_frame_size = (music_length - audio_length) // hyper_paramters.Sound.Hop_Size
 
-                if note[-1] == 0 and note_duration[-1] > cut_frame_size:    # last silence cutoff
-                    lyric_duration[-1] -= cut_frame_size
-                    note_duration[-1] -= cut_frame_size
+                if musics[-1][2] == 0 and musics[-1][0] > cut_frame_size:    # last silence cutoff
+                    musics[-1] = (musics[-1][0] - cut_frame_size, musics[-1][1], musics[-1][2], musics[-1][3])
                 else:   # distributed cutoff
-                    lyric_duration_indices = reversed([index for index, x in enumerate(lyric_duration) if x > 1])
-                    note_duration_indices = reversed([index for index, x in enumerate(note_duration) if x > 0])
-
-                    for lyric_duration_index, note_duration_index in cycle(zip(
-                        lyric_duration_indices,
-                        note_duration_indices
-                        )):
-                        lyric_duration[lyric_duration_index] -= 1
-                        note_duration[note_duration_index] -= 1
+                    for index in cycle(reversed([x for x in range(len(musics))])):
+                        musics[index] = (musics[index][0] - 1, musics[index][1], musics[index][2], musics[index][3])
                         cut_frame_size -= 1
-
                         if cut_frame_size <= 0:
                             break
 
             # music level concat makes big length error between music and audio....
-            lyrics.append(lyric)
-            notes.append(note)
-            lyric_durations.append(lyric_duration)
-            note_durations.append(note_duration)
-            audios.append(audio)
+            musics_concat.extend(musics)
+            audios_concat.append(audio)
 
-        lyrics_concat, notes_concat, lyric_durations_concat, note_durations_concat = [], [], [], []
-        for lyric, note, lyric_duration, note_duration in zip(lyrics, notes, lyric_durations, note_durations):
-            lyrics_concat.extend(lyric)
-            notes_concat.extend(note)
-            lyric_durations_concat.extend(lyric_duration)
-            note_durations_concat.extend(note_duration)
-
-        lyrics = lyrics_concat
-        notes = notes_concat
-        lyric_durations = lyric_durations_concat
-        note_durations = note_durations_concat
-        audios = np.hstack(audios)
+        musics = musics_concat
+        audios = np.hstack(audios_concat)
 
         assert \
-            sum(lyric_durations) == audios.shape[0] // hyper_paramters.Sound.Hop_Size, \
-            (wav_paths, sum(lyric_durations), audios.shape[0])
+            sum([x[0] for x in musics]) == audios.shape[0] // hyper_paramters.Sound.Hop_Size, \
+            (wav_paths, sum([x[0] for x in musics]), audios.shape[0])
         
-        lyrics_expand, notes_expand, lyric_durations_expand, note_durations_expand = Expand_by_Duration(
-            lyrics= lyrics,
-            notes= notes,
-            lyric_durations= lyric_durations,
-            note_durations= note_durations
-            )
+        musics = deque(musics)
+        remove_onset_indices = []
+        musics_deduplicate = []
+        while len(musics) > 0:
+            music = musics.popleft()
+            if len(musics_deduplicate) == 0:
+                musics_deduplicate.append(music)
+            elif all([
+                music[1] == musics_deduplicate[-1][1],
+                music[2] == musics_deduplicate[-1][2],
+                music[3] == musics_deduplicate[-1][3]
+                ]):
+                musics_deduplicate[-1] = (
+                    musics_deduplicate[-1][0] + music[0],
+                    musics_deduplicate[-1][1],
+                    musics_deduplicate[-1][2],
+                    musics_deduplicate[-1][3]
+                    )
+            elif all([
+                music[1] == musics_deduplicate[-1][1],
+                music[2] != musics_deduplicate[-1][2],
+                music[3] == musics_deduplicate[-1][3]
+                ]):
+                musics_deduplicate[-1] = (
+                    musics_deduplicate[-1][0],
+                    (musics_deduplicate[-1][1][0], musics_deduplicate[-1][1][1], []),
+                    musics_deduplicate[-1][2],
+                    musics_deduplicate[-1][3]
+                    )
+                musics_deduplicate.append(music)
+                remove_onset_indices.append(len(musics_deduplicate) - 1)
+            else:
+                musics_deduplicate.append(music)
+
+        for index in remove_onset_indices:
+            musics_deduplicate[index] = (
+                musics_deduplicate[index][0],
+                ([], musics_deduplicate[index][1][1], musics_deduplicate[index][1][2]),
+                musics_deduplicate[index][2],
+                musics_deduplicate[index][3],
+                )
+
+        musics = musics_deduplicate
+
+        # remove onset, nucleus, coda split.
+        musics = [
+            (duration, (phoneme[0] + [phoneme[1]] + phoneme[2]) if phoneme != ['<X>'] else phoneme, note, text)
+            for duration, phoneme, note, text in musics
+            ]
 
         is_generated = Pattern_File_Generate(
-            lyric= lyrics,
-            note= notes,
-            lyric_duration= lyric_durations,
-            note_duration= note_durations,
-            lyric_expand= lyrics_expand,
-            note_expand= notes_expand,
-            lyric_duration_expand= lyric_durations_expand,
-            note_duration_expand= note_durations_expand,
+            music= musics,
             audio= audios,
             music_label= music_label,
             singer= singer,
@@ -929,41 +903,33 @@ def NUS48E(
         if os.path.exists(pattern_path) or os.path.exists(os.path.join(f'./note_error/NUS48E/{singer}/{music_label}.png')):
             continue
 
-
         musics = pickle.load(open(data_path, 'rb'))
         musics = [
-            (end - start, lyric, note)
+            (
+                end - start,
+                [lyric] if lyric == '<X>' else lyric[0] + [lyric[1]] + lyric[2],
+                note,
+                lyric if lyric == '<X>' else ''.join(lyric[0] + [lyric[1]] + lyric[2])
+                )
             for start, end, note, lyric in musics
             ]
-        
-        lyrics, notes, lyric_durations, note_durations = Convert_Feature_Based_Music(
+
+        musics = Convert_Feature_Based_Duration(
             music= musics,
             sample_rate= hyper_paramters.Sound.Sample_Rate,
-            hop_size= hyper_paramters.Sound.Hop_Size,
-            verbose= verbose
+            hop_size= hyper_paramters.Sound.Hop_Size
             )
-        if lyrics is None:
-            continue
-        lyrics_expand, notes_expand, lyric_durations_expand, note_durations_expand = Expand_by_Duration(
-            lyrics= lyrics,
-            notes= notes,
-            lyric_durations= lyric_durations,
-            note_durations= note_durations
-            )
-
+        
         audio, _ = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)
+        audio = audio[:audio.shape[0] - (audio.shape[0] % hyper_paramters.Sound.Hop_Size)]
+        music_length = sum([x[0] for x in musics]) * hyper_paramters.Sound.Hop_Size
+        audio_length = audio.shape[0]
+        if music_length < audio_length:
+            audio = audio[:sum([x[0] for x in musics]) * hyper_paramters.Sound.Hop_Size]
         audio = librosa.util.normalize(audio) * 0.95
-        audio = audio[:len(lyric_durations_expand) * hyper_paramters.Sound.Hop_Size]
         
         Pattern_File_Generate(
-            lyric= lyrics,
-            note= notes,
-            lyric_duration= lyric_durations,
-            note_duration= note_durations,
-            lyric_expand= lyrics_expand,
-            note_expand= notes_expand,
-            lyric_duration_expand= lyric_durations_expand,
-            note_duration_expand= note_durations_expand,
+            music= musics,
             audio= audio,
             music_label= music_label,
             singer= singer,
@@ -1207,39 +1173,22 @@ def Kiritan(
                 music = music[:-1]
             else:
                 break
-        audio = librosa.util.normalize(audio) * 0.95
-        
-        lyrics, notes, lyric_durations, note_durations = Convert_Feature_Based_Music(
+
+        music = Convert_Feature_Based_Duration(
             music= music,
             sample_rate= hyper_paramters.Sound.Sample_Rate,
-            hop_size= hyper_paramters.Sound.Hop_Size,
-            verbose= verbose
+            hop_size= hyper_paramters.Sound.Hop_Size
             )
-
-        if lyric is None:
-            logging.warning(f'there is an error in\'{wav_path}\'. This pattern will is skipped.')
-            continue
-        lyrics_expand, notes_expand, lyric_durations_expand, note_durations_expand = Expand_by_Duration(
-            lyrics= lyrics,
-            notes= notes,
-            lyric_durations= lyric_durations,
-            note_durations= note_durations
-            )
-            
-        music_length = sum(lyric_durations) * hyper_paramters.Sound.Hop_Size
+    
+        audio = audio[:audio.shape[0] - (audio.shape[0] % hyper_paramters.Sound.Hop_Size)]
+        music_length = sum([x[0] for x in music]) * hyper_paramters.Sound.Hop_Size
         audio_length = audio.shape[0]
         if music_length < audio_length:
             audio = audio[:music_length]
+        audio = librosa.util.normalize(audio) * 0.95
 
         Pattern_File_Generate(
-            lyric= lyrics,
-            note= notes,
-            lyric_duration= lyric_durations,
-            note_duration= note_durations,
-            lyric_expand= lyrics_expand,
-            note_expand= notes_expand,
-            lyric_duration_expand= lyric_durations_expand,
-            note_duration_expand= note_durations_expand,
+            music= music,
             audio= audio,
             music_label= music_label,
             singer= 'Kiritan',
@@ -1253,8 +1202,8 @@ def Kiritan(
             )
 
 # for English
-def Phoneme_Split(
-    musics: List[Tuple[float, str, int]]
+def English_Phoneme_Split(
+    music: List[Tuple[float, str, int]]
     ) -> Tuple[float, Tuple[List[str], str, List[str]], int]:
     # /ʔ/ is not vowel.
     # However, in English, the next vowel of /ʔ/ is usually silence /ə/.
@@ -1265,7 +1214,7 @@ def Phoneme_Split(
         'æ', 'ɐ', 'ɑ', 'ɔ', 'ə', 'ɛ', 'ɜ', 'ɪ', 'ʊ', 'ʌ', 'ᵻ', 'ɚ', 'ʔ', 
         ]
 
-    pronunciations = [x[1] for x in musics]
+    pronunciations = [x[1] for x in music]
     lyrics = []
     for pronunciation in pronunciations:
         if pronunciation == '<X>':
@@ -1298,55 +1247,35 @@ def Phoneme_Split(
 
     # assert len(lyrics) == len(music)
 
-    if len(lyrics) != len(musics):
+    if len(lyrics) != len(music):
         return None
-    musics = [
-        (music[0], lyric, music[2])
-        for music, lyric in zip(musics, lyrics)
+    music = [
+        (music[0], lyric[0] + [lyric[1]] + lyric[2] if lyric != '<X>' else ['<X>'], music[2], music[1])
+        for music, lyric in zip(music, lyrics)
         ]
 
-    return musics
+    return music
 
-def Convert_Feature_Based_Music(
+def Convert_Feature_Based_Duration(
     music: List[Tuple[float, str, int]],
     sample_rate: int,
-    hop_size: int,
-    verbose: bool= False
-    ) -> Tuple[List[str], List[int], List[int], List[int]]:
+    hop_size: int
+    ) -> List[Tuple[float, str, int]]:
     previous_used = 0
-    lyrics = []
-    notes = []
-    lyric_durations = []
-    note_durations = []
 
-    for message_time, lyric, note in music:
+    feature_based_music = []
+    for message_time, lyric, note, text in music:
         duration = round(message_time * sample_rate) + previous_used
         previous_used = duration % hop_size
         duration = duration // hop_size
 
         if lyric == '<X>':
-            lyrics.append(lyric)
-            notes.append(note)
-            lyric_durations.append(duration)
-            note_durations.append(duration)
-        elif duration < len(lyric[0]) + 1 + len(lyric[2]):            
-            if verbose:
-                logging.warning(f'too short duration than lyric: {duration} < {len(lyric[0]) + 1 + len(lyric[2])}')
-            return None, None, None, None
-        else:
-            lyrics.extend(lyric[0]) # onset
-            lyrics.append(lyric[1]) # nuclues
-            lyrics.extend(lyric[2]) # coda
-            notes.extend([note] * (len(lyric[0]) + 1 + len(lyric[2])))            
-            lyric_durations.extend([1] * len(lyric[0]))
-            lyric_durations.append(duration - len(lyric[0]) - len(lyric[2]))
-            lyric_durations.extend([1] * len(lyric[2]))
-            note_durations.append(duration)
-            note_durations.extend([0] * (len(lyric[0]) + len(lyric[2])))
+            lyric = ['<X>']
+        feature_based_music.append((duration, lyric, note, text))
 
-    return lyrics, notes, lyric_durations, note_durations
+    return feature_based_music
 
-def G2P_Lyric(music):
+def Korean_G2P_Lyric(music):
     grapheme_string_list = []
     current_grapheme_string = []
     for _, lyric, _ in music:
@@ -1372,7 +1301,12 @@ def G2P_Lyric(music):
     if len(lyrics) != len(music):
         return None
     for index, lyric in enumerate(lyrics):
-        music[index] = (music[index][0], lyric, music[index][2])
+        music[index] = (
+            music[index][0],
+            lyric[0] + [lyric[1]] + lyric[2] if lyric != '<X>' else ['<X>'],
+            music[index][2],
+            music[index][1]
+            )
 
     return music
 
@@ -1420,7 +1354,13 @@ def Japanese_G2P_Lyric(music):
             next_syllable = None
 
         ipa_lyric = _Japanese_Syllable_to_IPA(current_lyric, next_syllable)
-        ipa_music.append((current_duration, ipa_lyric, current_note))
+        # ipa_music.append((current_duration, ipa_lyric, current_note))        
+        ipa_music.append((
+            current_duration,
+            ipa_lyric if ipa_lyric == '<X>' else ipa_lyric[0] + [ipa_lyric[1]] + ipa_lyric[2],
+            current_note,
+            current_lyric
+            ))
     
     return ipa_music
 
@@ -1445,14 +1385,7 @@ def Decompose(syllable: str):
     return onset, nucleus, coda
 
 def Pattern_File_Generate(
-    lyric: List[str],
-    note: List[int],
-    lyric_duration: List[int],
-    note_duration: List[int],
-    lyric_expand: List[str],
-    note_expand: List[int],
-    lyric_duration_expand: List[int],
-    note_duration_expand: List[int],
+    music: List[Tuple[str, List[str], int, str]],
     audio: np.array,
     singer: str,
     genre: str,
@@ -1475,30 +1408,36 @@ def Pattern_File_Generate(
         max= hyper_paramters.Sound.F0_Max,
         otype= 1,
         )[:latent_code.shape[1]]
-
-    if latent_code.shape[1] > len(lyric_expand):
+    
+    music_length = sum([x[0] for x in music])
+    if latent_code.shape[1] > music_length:
         # print('Case1')
-        latent_code = latent_code[math.floor((latent_code.shape[1] - len(lyric_expand)) / 2.0):-math.ceil((latent_code.shape[1] - len(lyric_expand)) / 2.0)]
-        f0 = f0[math.floor((f0.shape[0] - len(lyric_expand)) / 2.0):-math.ceil((f0.shape[0] - len(lyric_expand)) / 2.0)]
-    elif len(lyric_expand) > latent_code.shape[1]:
+        latent_code = latent_code[math.floor((latent_code.shape[1] - music_length) / 2.0):-math.ceil((latent_code.shape[1] - music_length) / 2.0)]
+        f0 = f0[math.floor((f0.shape[0] - music_length) / 2.0):-math.ceil((f0.shape[0] - music_length) / 2.0)]
+    elif music_length > latent_code.shape[1]:
         # print('Case2')
-        fix_length = len(lyric_expand) - latent_code.shape[1]
+        fix_length = music_length - latent_code.shape[1]
         fix_index = None
-        for fix_index in reversed(range(len(lyric_duration))):
-            if lyric_duration[fix_index] <= fix_length:                
+        for fix_index in reversed(range(len(music))):
+            if music[fix_index][0] <= fix_length:
                 continue
             break
-
-        lyric_duration[fix_index] -= fix_length
-        note_duration[fix_index] -= fix_length
-        lyric_expand = lyric_expand[:sum(lyric_duration[:fix_index + 1]) - fix_length + 1] + lyric_expand[sum(lyric_duration[:fix_index + 1]) + 1:]
-        note_expand = note_expand[:sum(note_duration[:fix_index + 1]) - fix_length + 1] + note_expand[sum(note_duration[:fix_index + 1]) + 1:]
-        lyric_duration_expand = lyric_duration_expand[:sum(lyric_duration[:fix_index + 1]) - fix_length + 1] + lyric_duration_expand[sum(lyric_duration[:fix_index + 1]) + 1:]
-        note_duration_expand = note_duration_expand[:sum(note_duration[:fix_index + 1]) - fix_length + 1] + note_duration_expand[sum(note_duration[:fix_index + 1]) + 1:]
-
-    # criterion = 1.0, this is just empirical criterion.
+        music[fix_index] = (music[fix_index][0] - fix_length, music[fix_index][1], music[fix_index][2], music[fix_index][3])
+        
     note_from_f0 = Note_Predictor(f0).astype(np.float16)
-    note_from_midi = np.array(note_expand).astype(np.float16)
+
+    def Calc_Note_from_Music(
+        music: List[Tuple[str, List[str], int, str]],
+        correction: int= 0
+        ):
+        return np.array([
+            note + (correction if note > 0 else 0)
+            for duration, _, note, _ in music
+            for _ in range(duration)
+            ]).astype(np.float16)
+
+    note_from_midi = Calc_Note_from_Music(music)
+    
     note_from_f0_without_0, note_from_midi_without_0 = note_from_f0[(note_from_f0 > 0) * (note_from_midi > 0)], note_from_midi[(note_from_f0 > 0) * (note_from_midi > 0)]
     note_error_value = np.abs(note_from_f0_without_0 - note_from_midi_without_0).mean()
 
@@ -1506,16 +1445,20 @@ def Pattern_File_Generate(
     if note_error_value > note_error_criterion:
         is_fixed = False
         if np.abs(note_from_f0_without_0 - note_from_midi_without_0 - 12.0).mean() < note_error_criterion:
-            note = [(x + 12 if x != 0 else x) for x in note]
-            note_expand = [(x + 12 if x != 0 else x) for x in note_expand]
-            note_fix_from_midi = np.array(note_expand).astype(np.float16)
+            music = [
+                (duration, lyric, note + (12 if note > 0 else 0), text)
+                for duration, lyric, note, text in music
+                ]
+            note_fix_from_midi = Calc_Note_from_Music(music)
             note_fix_from_midi_without_0 = note_fix_from_midi[(note_from_f0 > 0) * (note_from_midi > 0)]
             note_fix_error_value = np.abs(note_from_f0_without_0 - note_fix_from_midi_without_0).mean()
             is_fixed = True
         elif np.abs(note_from_f0_without_0 - note_from_midi_without_0 + 12.0).mean() < note_error_criterion:
-            note = [(x - 12 if x != 0 else x) for x in note]
-            note_expand = [(x - 12 if x != 0 else x) for x in note_expand]
-            note_fix_from_midi = np.array(note_expand).astype(np.float16)
+            music = [
+                (duration, lyric, note - (12 if note > 0 else 0), text)
+                for duration, lyric, note, text in music
+                ]
+            note_fix_from_midi = Calc_Note_from_Music(music)
             note_fix_from_midi_without_0 = note_fix_from_midi[(note_from_f0 > 0) * (note_from_midi > 0)]
             note_fix_error_value = np.abs(note_from_f0_without_0 - note_fix_from_midi_without_0).mean()
             is_fixed = True
@@ -1532,10 +1475,10 @@ def Pattern_File_Generate(
                 plt.plot(note_from_midi, label= 'MIDI Note')
                 plt.plot(note_fix_from_midi, label= 'Fixed MIDI Note')
                 plt.xticks(
-                    ticks= [x for x in [0.0] + np.cumsum(lyric_duration).tolist()[:-1]],
-                    labels= [x for x in lyric],
+                    ticks= [x for x in [0.0] + np.cumsum([duration for duration, _, _, _ in music]).tolist()[:-1]],
+                    labels= [text for _, _, _ , text in music],
                     )
-                for x in [x for x in [0.0] + np.cumsum(lyric_duration).tolist()[:-1]]:
+                for x in [x for x in [0.0] + np.cumsum([duration for duration, _, _, _ in music]).tolist()[:-1]]:
                     plt.axvline(x= x, linewidth= 0.5)
                 plt.margins(x= 0)
                 plt.legend()
@@ -1554,8 +1497,8 @@ def Pattern_File_Generate(
                 plt.plot(note_from_f0, label= 'F0 Note')
                 plt.plot(note_from_midi, label= 'MIDI Note')
                 plt.xticks(
-                    ticks= [x for x in [0.0] + np.cumsum(lyric_duration).tolist()[:-1]],
-                    labels= [x for x in lyric],
+                    ticks= [x for x in [0.0] + np.cumsum([duration for duration, _, _, _ in music]).tolist()[:-1]],
+                    labels= [text for _, _, _ , text in music],
                     )
                 # for x in [x for x in [0.0] + np.cumsum(lyric_duration).tolist()[:-1]]:
                 #     plt.axvline(x= x, linewidth= 0.5)
@@ -1569,14 +1512,7 @@ def Pattern_File_Generate(
     pattern = {
         'Latent_Code': latent_code.astype(np.int16),
         'F0': f0.astype(np.float16),
-        'Lyric': lyric,
-        'Note': note,
-        'Lyric_Duration': lyric_duration,
-        'Note_Duration': note_duration,
-        'Lyric_Expand': lyric_expand,
-        'Note_Expand': note_expand,
-        'Lyric_Duration_Expand': lyric_duration_expand,
-        'Note_Duration_Expand': note_duration_expand,
+        'Music': music,
         'Singer': singer,
         'Genre': genre,
         'Language': language,
@@ -1645,12 +1581,7 @@ def Metadata_Generate(
         'File_List': [],
         'Latent_Length_Dict': {},
         'F0_Length_Dict': {},
-        'Lyric_Length_Dict': {},
-        'Note_Length_Dict': {},
-        'Duration_Length_Dict': {},
-        'Lyric_Expand_Length_Dict': {},
-        'Note_Expand_Length_Dict': {},
-        'Duration_Expand_Length_Dict': {},
+        'Music_Length_Dict': {},
         'Singer_Dict': {},
         'Genre_Dict': {},
         'Language_Dict': {},
@@ -1667,46 +1598,40 @@ def Metadata_Generate(
             with open(os.path.join(root, file).replace('\\', '/'), 'rb') as f:
                 pattern_dict = pickle.load(f)
             file = os.path.join(root, file).replace('\\', '/').replace(pattern_path, '').lstrip('/')
-            try:
-                if not all([
-                    key in pattern_dict.keys()
-                    for key in ('Latent_Code', 'F0', 'Lyric', 'Note', 'Singer', 'Genre', 'Dataset')
-                    ]):
-                    print(pattern_dict.keys())
-                    continue
+            if not all([
+                key in pattern_dict.keys()
+                for key in ('Latent_Code', 'F0', 'Music', 'Singer', 'Genre', 'Dataset')
+                ]):
+                print(f'Skipped pickle file \'{file}\' because of insufficient dict_keys: {pattern_dict.keys()}')
+                continue
 
-                new_metadata_dict['F0_Length_Dict'][file] = pattern_dict['F0'].shape[0]
-                new_metadata_dict['Lyric_Length_Dict'][file] = len(pattern_dict['Lyric'])
-                new_metadata_dict['Note_Length_Dict'][file] = len(pattern_dict['Note'])
-                new_metadata_dict['Duration_Length_Dict'][file] = len(pattern_dict['Lyric_Duration'])
-                new_metadata_dict['Lyric_Expand_Length_Dict'][file] = len(pattern_dict['Lyric_Expand'])
-                new_metadata_dict['Note_Expand_Length_Dict'][file] = len(pattern_dict['Note_Expand'])
-                new_metadata_dict['Duration_Expand_Length_Dict'][file] = len(pattern_dict['Lyric_Duration_Expand'])
-                new_metadata_dict['Singer_Dict'][file] = pattern_dict['Singer']
-                new_metadata_dict['File_List'].append(file)
-                if not pattern_dict['Singer'] in new_metadata_dict['File_List_by_Singer_Dict'].keys():
-                    new_metadata_dict['File_List_by_Singer_Dict'][pattern_dict['Singer']] = []
-                new_metadata_dict['File_List_by_Singer_Dict'][pattern_dict['Singer']].append(file)
+            new_metadata_dict['Latent_Length_Dict'][file] = pattern_dict['Latent_Code'].shape[1]
+            new_metadata_dict['F0_Length_Dict'][file] = pattern_dict['F0'].shape[0]
+            new_metadata_dict['Music_Length_Dict'][file] = len(pattern_dict['Music'])
+            new_metadata_dict['Singer_Dict'][file] = pattern_dict['Singer']
+            new_metadata_dict['File_List'].append(file)
+            if not pattern_dict['Singer'] in new_metadata_dict['File_List_by_Singer_Dict'].keys():
+                new_metadata_dict['File_List_by_Singer_Dict'][pattern_dict['Singer']] = []
+            new_metadata_dict['File_List_by_Singer_Dict'][pattern_dict['Singer']].append(file)
 
-                if not pattern_dict['Singer'] in latent_dict.keys():
-                    latent_dict[pattern_dict['Singer']] = {'Min': math.inf, 'Max': -math.inf}
-                if not pattern_dict['Singer'] in f0_dict.keys():
-                    f0_dict[pattern_dict['Singer']] = []
-                
-                latent = hificodec.quantizer.embed(torch.from_numpy(pattern_dict['Latent_Code']).T[None].long().to(device))[0].cpu()
-                latent_dict[pattern_dict['Singer']]['Min'] = min(latent_dict[pattern_dict['Singer']]['Min'], latent.min().item())
-                latent_dict[pattern_dict['Singer']]['Max'] = max(latent_dict[pattern_dict['Singer']]['Max'], latent.max().item())
-                
-                f0_dict[pattern_dict['Singer']].append(pattern_dict['F0'])
-                tokens.extend(pattern_dict['Lyric'])
-                singers.append(pattern_dict['Singer'])
-                genres.append(pattern_dict['Genre'])
-                languages.append(pattern_dict['Language'])
+            if not pattern_dict['Singer'] in latent_dict.keys():
+                latent_dict[pattern_dict['Singer']] = {'Min': math.inf, 'Max': -math.inf}
+            if not pattern_dict['Singer'] in f0_dict.keys():
+                f0_dict[pattern_dict['Singer']] = []
+            
+            latent = hificodec.quantizer.embed(torch.from_numpy(pattern_dict['Latent_Code']).T[None].long().to(device))[0].cpu()
+            latent_dict[pattern_dict['Singer']]['Min'] = min(latent_dict[pattern_dict['Singer']]['Min'], latent.min().item())
+            latent_dict[pattern_dict['Singer']]['Max'] = max(latent_dict[pattern_dict['Singer']]['Max'], latent.max().item())
+            
+            f0_dict[pattern_dict['Singer']].append(pattern_dict['F0'])
+            tokens.extend([phoneme for _, lyric, _, _ in pattern_dict['Music'] for phoneme in lyric])
+            singers.append(pattern_dict['Singer'])
+            genres.append(pattern_dict['Genre'])
+            languages.append(pattern_dict['Language'])
 
-                min_note = min(min_note, *[x for x in pattern_dict['Note'] if x > 0])
-                max_note = max(max_note, *[x for x in pattern_dict['Note'] if x > 0])
-            except Exception as e:
-                logging.critical('File \'{}\' is not correct pattern file. This file is ignored. Error: {}'.format(file, e))
+            min_note = min(min_note, *[note for _, _, note, _ in pattern_dict['Music'] if note > 0])
+            max_note = max(max_note, *[note for _, _, note, _ in pattern_dict['Music'] if note > 0])
+            
             files_tqdm.update(1)
 
     new_metadata_dict['Min_Note'] = min_note
@@ -1831,3 +1756,5 @@ if __name__ == '__main__':
     Metadata_Generate(hp, True)
 
 # python -m Pattern_Generator -hp Hyper_Parameters.yaml -csd /mnt/f/Rawdata_Music/CSD_Fix
+# python -m Pattern_Generator -hp Hyper_Parameters.yaml -csde /mnt/f/Rawdata_Music/CSD_1.1/english
+# python -m Pattern_Generator -hp Hyper_Parameters.yaml -am /mnt/f/Rawdata_Music/AIHub

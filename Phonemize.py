@@ -102,7 +102,7 @@ def _Korean_Phonemize(texts: Union[str, List[str]]):
         ]
     
     pronunciations = [
-        pronunciation.replace('x', '')
+        pronunciation.replace('x', '').replace('\u031A', '')
         for pronunciation in pronunciations
         ]
 

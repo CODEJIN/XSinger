@@ -11,3 +11,5 @@ hificodec/
 results*
 dac/
 VCTK_Load.pickle
+note_error/
+note_fix/

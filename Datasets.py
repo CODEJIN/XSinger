@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 import functools
 from random import choice
 
-from Pattern_Generator import G2P_Lyric, Convert_Feature_Based_Music, Expand_by_Duration
+from Pattern_Generator import Korean_G2P_Lyric, Convert_Feature_Based_Duration, Expand_by_Duration
 
 def Lyric_to_Token(lyric: List[str], token_dict: Dict[str, int]):
     return [
@@ -133,10 +133,10 @@ class Inference_Dataset(torch.utils.data.Dataset):
             text = lyric
             
             if language == 'Korean':
-                music = G2P_Lyric(music)
+                music = Korean_G2P_Lyric(music)
             else:
                 raise NotImplementedError(f'Unsupported language: {language}')
-            lyric, note, lyric_duration, note_duration = Convert_Feature_Based_Music(
+            lyric, note, lyric_duration, note_duration = Convert_Feature_Based_Duration(
                 music= music,
                 sample_rate= sample_rate,
                 hop_size= hop_size,
