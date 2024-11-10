@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-import mido, os, pickle, yaml, argparse, math, librosa, hgtk, logging, re, sys, warnings, textgrid as tg, music21
+import mido, os, pickle, yaml, argparse, math, librosa, hgtk, logging, re, sys, warnings, textgrid as tg, music21, json
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
@@ -58,7 +58,7 @@ def AIHub_Mediazen(
             path_dict[key]['wav' if extension.upper() == '.WAV' else 'mid'] = os.path.join(root, file).replace('\\', '/')            
 
     paths = [
-        (value['wav'], value['mid'], key.strip().split('_')[0].upper(), 'AM' + key.strip().split('_')[4].upper())
+        (value['wav'], value['mid'], key.strip().split('_')[0].upper(), 'AMZ_' + key.strip().split('_')[4].upper())
         for key, value in path_dict.items()
         if 'wav' in value.keys() and 'mid' in value.keys()
         ]
@@ -744,8 +744,10 @@ def M4Singer(
             musics = [x for x in musics if x[0] > 0 or x[3] != '<X>']
 
             if any([x[0] == 0 for x in musics]):
-                print(musics)
-                assert False
+                logging.warning(f'\'{midi_path}\' has an garbege note. Generator remove the note temporarily.')
+                for x in musics:
+                    print(('' if x[0] > 0 else '***') + str(x))
+                musics = [x for x in musics if x[0] > 0]
 
             audio = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)[0]
             audio = audio[:audio.shape[0] - (audio.shape[0] % hyper_paramters.Sound.Hop_Size)]
@@ -946,7 +948,6 @@ def Kiritan(
     dataset_path: str,
     verbose: bool= False
     ):
-    logging.warning('Kiritan 중간에 쉼표 있을 때의 촉음 처리 추가할 것')
     music_label_dict = {
         1: 'Color',
         2: 'らむねサンセット',
@@ -1201,6 +1202,163 @@ def Kiritan(
             verbose= verbose
             )
 
+def AIHub_Metabuild(
+    hyper_paramters: Namespace,
+    dataset_path: str,
+    verbose: bool= False
+    ):
+    wav_path_dict, json_path_dict = {}, {}
+    for root, _, files in os.walk(dataset_path):
+        for file in sorted(files):
+            if os.path.splitext(file)[1].lower() == '.wav':
+                wav_path_dict[os.path.splitext(file)[0]] = os.path.join(root, file).replace('\\', '/')
+            elif os.path.splitext(file)[1].lower() == '.json':
+                json_path_dict[os.path.splitext(file)[0]] = os.path.join(root, file).replace('\\', '/')
+
+    paths = sorted([
+        (wav_path, json_path_dict[key])
+        for key, wav_path in wav_path_dict.items()
+        if key in json_path_dict.keys()
+        ])
+    
+    silence_criterion = hyper_paramters.Sound.Hop_Size * 4 / hyper_paramters.Sound.Sample_Rate
+    nucleus_long_sound_convert_dict = {'ㅐ': 'ㅔ', 'ㅒ': 'ㅔ', 'ㅖ': 'ㅔ', 'ㅚ': 'ㅞ', 'ㅙ': 'ㅞ', 'ㅢ': 'ㅣ'}
+
+    is_eval_generated = False
+    for index, (wav_path, json_path) in tqdm(
+        enumerate(paths),
+        total= len(paths),
+        desc= 'AIHub_Metabuild'
+        ):
+        _, singer, _, _, _, genre, music_label = os.path.splitdrive(os.path.basename(wav_path))[0].strip().split('_')
+        singer = 'AMB_S' + singer
+        genre = genre.capicalize()
+
+        if any([
+            os.path.exists(os.path.join(x, 'AIHub_Metabuild', singer, f'{music_label}.pickle').replace('\\', '/'))
+            for x in [hyper_paramters.Train.Eval_Pattern.Path, hyper_paramters.Train.Train_Pattern.Path]
+            ] + [
+                os.path.exists(os.path.join('./note_error/AIHub_Metabuild', singer, f'{music_label}.png'))
+            ]):
+            continue
+
+        music_json = json.load(open(json_path, 'r', encoding= 'utf-8-sig'))
+        music = []
+        for x in music_json['notes']:
+            start, end, lyric, note = float(x['start_time']), float(x['end_time']), x['lyric'], int(x['midi_num'])
+            if len(music) == 0 and start > 0.0:
+                music.append([0.0, start, '<X>', 0])
+            elif len(music) > 0 and start > music[-1][1]:
+                if start - music[-1][1] >= silence_criterion:
+                    music.append([music[-1][1], start, '<X>', 0])
+                elif start - music[-1][1] < silence_criterion:
+                    music[-1][1] = start
+
+            if lyric == '' and note == 96:
+                lyric, note = '<X>', 0
+            music.append([start, end, lyric, note])
+
+        for music_index in range(len(music)):
+            if music[music_index][2] == '' and music[music_index][3] != 0:
+                for previous_music_index in reversed(range(music_index)):
+                    if music[previous_music_index][2] != '<X>':
+                        break
+                for next_music_index in range(music_index + 1, len(music)):
+                    if music[next_music_index][2] != '<X>':
+                        break
+
+                before_lyric = ''.join([
+                    x[2] if x[2] != '' else ' '
+                    for x in music[previous_music_index:next_music_index + 1]
+                    ])
+                
+                previous_onset, previous_nucleus, previous_coda = hgtk.letter.decompose(music[previous_music_index][2])
+                next_onset, next_nucleus, next_coda = hgtk.letter.decompose(music[next_music_index][2])
+
+                change_previous_coda = False
+                if previous_coda == '': # 단순 장음
+                    onset = 'ㅇ'
+                    nuclues = nucleus_long_sound_convert_dict.get(previous_nucleus, previous_nucleus)
+                    coda = ''
+                elif previous_coda != '' and next_onset == 'ㅇ': # 장음의 중간일 가능성이 높음, previous coda가 이쪽으로 옮겨져야 함
+                    onset = previous_coda
+                    nuclues = nucleus_long_sound_convert_dict.get(previous_nucleus, previous_nucleus)
+                    coda = ''
+                    change_previous_coda = True
+                elif previous_coda != '' and next_onset != 'ㅇ': # 세 음절 중 소실된 가운데 음절일 가능성이 높음, previous coda가 이쪽으로 옮겨져야 함
+                    onset = previous_coda
+                    nucleus =  'ㅡ'
+                    coda = ''
+                    change_previous_coda = True
+
+                if change_previous_coda:
+                    music[previous_music_index][2] = hgtk.letter.compose(previous_onset, previous_nucleus, '')
+                music[music_index][2] = hgtk.letter.compose(onset, nucleus, coda)
+
+                after_lyric = ''.join([
+                    x[2] if x[2] != '' else ' '
+                    for x in music[previous_music_index:next_music_index + 1]
+                    ])
+                logging.info(f'{json_path}, {before_lyric} -> {after_lyric}')
+
+        music_fix = []
+        for music_index in range(len(music)):
+            if len(music_fix) == 0 or music_fix[-1][2] != music[music_index][2] or music_fix[-1][3] != music[music_index][3]:
+                music_fix.append(music[music_index])
+            else:   # music_fix[-1][2] == music[music_index][2] and music_fix[-1][3] == music[music_index][3]:
+                music_fix[-1][1] = music[music_index][1]
+        music = music_fix
+
+        music = [
+            [end - start, syllable, note]
+            for start, end, syllable, note in music
+            ]
+        
+        audio, _ = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)
+
+        initial_audio_length = audio.shape[0]
+        while True:
+            if music[0][1] == '<X>':
+                audio = audio[int(music[0][0] * hyper_paramters.Sound.Sample_Rate):]
+                music = music[1:]
+            else:
+                break
+        while True:
+            if music[-1][1] == '<X>':
+                music = music[:-1]
+            else:
+                break
+        audio = audio[:int(sum([x[0] for x in music]) * hyper_paramters.Sound.Sample_Rate)]    # remove last silence
+        
+        # This is to avoid to use wrong data.
+        if initial_audio_length * 0.5 > audio.shape[0]:
+            continue
+
+        audio = librosa.util.normalize(audio) * 0.95
+        music = Korean_G2P_Lyric(music)
+        if music is None:
+            continue
+        music = Convert_Feature_Based_Duration(
+            music= music,
+            sample_rate= hyper_paramters.Sound.Sample_Rate,
+            hop_size= hyper_paramters.Sound.Hop_Size
+            )
+
+        is_generated = Pattern_File_Generate(
+            music= music,
+            audio= audio,
+            music_label= music_label,
+            singer= singer,
+            genre= genre,
+            language= 'Korean',
+            dataset= 'AIHub_Metabuild',
+            is_eval_music= not is_eval_generated or np.random.rand() < 0.001,
+            hyper_paramters= hyper_paramters,
+            verbose= verbose
+            )
+        
+        is_eval_generated = is_eval_generated or is_generated
+
 # for English
 def English_Phoneme_Split(
     music: List[Tuple[float, str, int]]
@@ -1257,7 +1415,7 @@ def English_Phoneme_Split(
     return music
 
 def Convert_Feature_Based_Duration(
-    music: List[Tuple[float, str, int]],
+    music: List[Tuple[float, str, int, str]],
     sample_rate: int,
     hop_size: int
     ) -> List[Tuple[float, str, int]]:
@@ -1343,7 +1501,7 @@ def Japanese_G2P_Lyric(music):
     ipa_music = []
     for music_index, (current_duration, current_lyric, current_note) in enumerate(music):
         if current_lyric == '<X>':
-            ipa_music.append((current_duration, current_lyric, current_note))
+            ipa_music.append((current_duration, [current_lyric], current_note, current_lyric))
             continue
         
         if music_index + 1 < len(music) and music[music_index + 1][1] != '<X>':
@@ -1400,6 +1558,7 @@ def Pattern_File_Generate(
     audio_tensor = torch.from_numpy(audio).to(device).float()
     with torch.inference_mode():
         latent_code = hificodec.encode(audio_tensor[None])[0].T.cpu().numpy() # [4, Audio_t / 320]
+
     f0 = rapt(
         x= audio * 32768,
         fs= hyper_paramters.Sound.Sample_Rate,
@@ -1412,7 +1571,7 @@ def Pattern_File_Generate(
     music_length = sum([x[0] for x in music])
     if latent_code.shape[1] > music_length:
         # print('Case1')
-        latent_code = latent_code[math.floor((latent_code.shape[1] - music_length) / 2.0):-math.ceil((latent_code.shape[1] - music_length) / 2.0)]
+        latent_code = latent_code[:, math.floor((latent_code.shape[1] - music_length) / 2.0):-math.ceil((latent_code.shape[1] - music_length) / 2.0)]
         f0 = f0[math.floor((f0.shape[0] - music_length) / 2.0):-math.ceil((f0.shape[0] - music_length) / 2.0)]
     elif music_length > latent_code.shape[1]:
         # print('Case2')
@@ -1619,6 +1778,10 @@ def Metadata_Generate(
             if not pattern_dict['Singer'] in f0_dict.keys():
                 f0_dict[pattern_dict['Singer']] = []
             
+            print(
+                os.path.join(root, file).replace('\\', '/'),
+                torch.from_numpy(pattern_dict['Latent_Code']).T[None].long().to(device).shape
+                )
             latent = hificodec.quantizer.embed(torch.from_numpy(pattern_dict['Latent_Code']).T[None].long().to(device))[0].cpu()
             latent_dict[pattern_dict['Singer']]['Min'] = min(latent_dict[pattern_dict['Singer']]['Min'], latent.min().item())
             latent_dict[pattern_dict['Singer']]['Max'] = max(latent_dict[pattern_dict['Singer']]['Max'], latent.max().item())
@@ -1755,6 +1918,11 @@ if __name__ == '__main__':
     Metadata_Generate(hp, False)
     Metadata_Generate(hp, True)
 
-# python -m Pattern_Generator -hp Hyper_Parameters.yaml -csd /mnt/f/Rawdata_Music/CSD_Fix
-# python -m Pattern_Generator -hp Hyper_Parameters.yaml -csde /mnt/f/Rawdata_Music/CSD_1.1/english
-# python -m Pattern_Generator -hp Hyper_Parameters.yaml -am /mnt/f/Rawdata_Music/AIHub
+# python -m Pattern_Generator -hp Hyper_Parameters.yaml \
+#   -csd /mnt/f/Rawdata_Music/CSD_Fix \
+#   -csde /mnt/f/Rawdata_Music/CSD_1.1/english \
+#   -am /mnt/f/Rawdata_Music/AIHub_Mediazen \
+#   -m4 /mnt/f/Rawdata_Music/m4singer \
+#   -nus48e /mnt/f/Rawdata_Music/NUS48E \
+#   -kiritan /mnt/f/Rawdata_Music/Kiritan \
+#   -verbose

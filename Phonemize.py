@@ -102,7 +102,7 @@ def _Korean_Phonemize(texts: Union[str, List[str]]):
         ]
     
     pronunciations = [
-        pronunciation.replace('x', '').replace('\u031A', '')
+        pronunciation.replace('x', '')
         for pronunciation in pronunciations
         ]
 
@@ -114,153 +114,15 @@ korean_vowels = sorted(
     reverse= True
     )
 korean_boundary_dict = {
-    'ns͈': ('n', 's͈'),
-    'p̚t͡ɕʰ': ('p̚', 't͡ɕʰ'),
-    'h': ('', 'h'),
-    'ɭsʰ': ('ɭ', 'sʰ'),
-    't͡ɕ͈': ('', 't͡ɕ͈'),
-    't̚t͡ɕ͈': ('t̚', 't͡ɕ͈'),
-    'p̚': ('', 'p̚'),
-    'ŋd͡ʑ': ('ŋ', 'd͡ʑ'),
-    'mt͡ɕ͈': ('m', 't͡ɕ͈'),
-    'nn': ('n', 'n'),
-    'nɡ': ('n', 'ɡ'),
-    'ŋp͈': ('ŋ', 'p͈'),
-    'ɭt͡ɕʰ': ('ɭ', 't͡ɕʰ'),
-    'mk͈': ('m', 'k͈'),
-    't̚t͈': ('t̚', 't͈'),
-    't͈': ('', 't͈'),
-    'ɭkʰ': ('ɭ', 'kʰ'),
-    'ŋd': ('ŋ', 'd'),
-    'ŋn': ('ŋ', 'n'),
-    't̚k͈': ('t̚', 'k͈'),
-    'ɭb': ('ɭ', 'b'),
-    'ŋb': ('ŋ', 'b'),
-    'ɭs͈': ('ɭ', 's͈'),
-    'p̚pʰ': ('p̚', 'pʰ'),
-    'ɡ': ('', 'ɡ'),
-    'np͈': ('n', 'p͈'),
-    'k̚p͈': ('k̚', 'p͈'),
-    't̚p͈': ('t̚', 'p͈'),
-    'nb': ('n', 'b'),
-    't': ('', 't'),
-    'k͈': ('', 'k͈'),
-    'k̚pʰ': ('k̚', 'pʰ'),
-    'md': ('m', 'd'),
-    'ŋt͡ɕ͈': ('ŋ', 't͡ɕ͈'),
-    'ɦ': ('', 'ɦ'),
-    'kʰ': ('', 'kʰ'),
-    'nk͈': ('n', 'k͈'),
-    'nm': ('n', 'm'),
-    'm': ('', 'm'),
-    'ɭɭ': ('ɭ', 'ɭ'),
-    'k': ('', 'k'),
-    'ŋɦ': ('ŋ', 'ɦ'),
-    'b': ('', 'b'),
-    't̚pʰ': ('t̚', 'pʰ'),
-    't̚t͡ɕʰ': ('t̚', 't͡ɕʰ'),
-    'p͈': ('', 'p͈'),
-    'sʰ': ('', 'sʰ'),
-    'k̚t͈': ('k̚', 't͈'),
-    'nɦ': ('n', 'ɦ'),
-    't̚': ('', 't̚'),
-    'ŋt͈': ('ŋ', 't͈'),
-    'ŋm': ('ŋ', 'm'),
-    'k̚': ('', 'k̚'),
-    'p̚p͈': ('p̚', 'p͈'),
-    'ŋkʰ': ('ŋ', 'kʰ'),
-    'k̚tʰ': ('k̚', 'tʰ'),
-    'ms͈': ('m', 's͈'),
-    'ntʰ': ('n', 'tʰ'),
-    'ŋtʰ': ('ŋ', 'tʰ'),
-    'ɾ': ('', 'ɾ'),
-    'ŋt͡ɕʰ': ('ŋ', 't͡ɕʰ'),
-    'nd͡ʑ': ('n', 'd͡ʑ'),
-    'mtʰ': ('m', 'tʰ'),
-    'ɭpʰ': ('ɭ', 'pʰ'),
-    'ɭk͈': ('ɭ', 'k͈'),
-    'ɭɡ': ('ɭ', 'ɡ'),
-    'mɡ': ('m', 'ɡ'),
-    't͡ɕ': ('', 't͡ɕ'),
-    'p̚kʰ': ('p̚', 'kʰ'),
-    'ɭ': ('ɭ', ''),
-    'p̚t͈': ('p̚', 't͈'),
-    'd͡ʑ': ('', 'd͡ʑ'),
-    't͡ɕʰ': ('', 't͡ɕʰ'),
-    'ks͈': ('k', 's͈'),
-    'ɾɦ': ('ɾ', 'ɦ'),
-    'p': ('', 'p'),
-    'mt͈': ('m', 't͈'),
-    'md͡ʑ': ('m', 'd͡ʑ'),
-    'p̚k͈': ('p̚', 'k͈'),
-    'k̚t͡ɕ͈': ('k̚', 't͡ɕ͈'),
-    'mm': ('m', 'm'),
-    'nt͡ɕʰ': ('n', 't͡ɕʰ'),
-    'mɦ': ('m', 'ɦ'),
-    'mb': ('m', 'b'),
-    'k̚t͡ɕʰ': ('k̚', 't͡ɕʰ'),
-    'ɭn': ('ɭ', 'n'),
-    'mp͈': ('m', 'p͈'),
-    'ŋ': ('ŋ', ''),
-    'nt͡ɕ͈': ('n', 't͡ɕ͈'),
-    'p̚t͡ɕ͈': ('p̚', 't͡ɕ͈'),
-    'nsʰ': ('n', 'sʰ'),
-    'ŋɡ': ('ŋ', 'ɡ'),
-    'ɭp͈': ('ɭ', 'p͈'),
-    't̚tʰ': ('t̚', 'tʰ'),
-    'ŋpʰ': ('ŋ', 'pʰ'),
-    'ɭt͡ɕ͈': ('ɭ', 't͡ɕ͈'),
-    'nd': ('n', 'd'),
-    'ŋsʰ': ('ŋ', 'sʰ'),
-    'ɭt͈': ('ɭ', 't͈'),
-    'p̚tʰ': ('p̚', 'tʰ'),
-    'ŋk͈': ('ŋ', 'k͈'),
-    'mpʰ': ('m', 'pʰ'),
-    'ɭm': ('ɭ', 'm'),
-    'npʰ': ('n', 'pʰ'),
-    's͈': ('', 's͈'),
-    'pʰ': ('', 'pʰ'),
-    'k̚kʰ': ('k̚', 'kʰ'),
-    'mn': ('m', 'n'),
-    'nt͈': ('n', 't͈'),
-    'mt͡ɕʰ': ('m', 't͡ɕʰ'),
-    't̚s͈': ('t̚', 's͈'),
-    'k̚k͈': ('k̚', 'k͈'),
-    'ps͈': ('p', 's͈'),
-    'ɭtʰ': ('ɭ', 'tʰ'),
-    'mkʰ': ('m', 'kʰ'),
-    'ŋs͈': ('ŋ', 's͈'),
-    't̚kʰ': ('t̚', 'kʰ'),
-    'ɭd': ('ɭ', 'd'),
-    'tʰ': ('', 'tʰ'),
-    'nkʰ': ('n', 'kʰ'),
-    'n': ('', 'n'),
-    'ɭd͡ʑ': ('ɭ', 'd͡ʑ'),
-    'msʰ': ('m', 'sʰ'),
-    'd': ('', 'd'),
-    # custom by dataset
-    'ɭʎ': ('ɭ', 'ʎ'),
-    'ɾɣ': ('ɾ', 'ɣ'),
-    'mɕʰ': ('m', 'ɕʰ'),
-    'ŋɕʰ': ('ŋ', 'ɕʰ'),
-    'ŋɣ': ('ŋ', 'ɣ'),
-    'ŋɲ': ('ŋ', 'ɲ'),
-    'ŋβ': ('ŋ', 'β'),
-    'ɭɕʰ': ('ɭ', 'ɕʰ'),
-    'ɭɕ͈': ('ɭ', 'ɕ͈'),
-    'kç': ('k', 'ç'),
-    'kɕ͈': ('k', 'ɕ͈'),
-    'nɕʰ': ('n', 'nɕʰ'),
-    'nɣ': ('n', 'ɣ'),
-    'nɲ': ('n', 'ɲ'),
-    'nʃʰ': ('n', 'ʃʰ'),
-    'nʝ': ('n', 'ʝ'),
-    'nβ': ('n', 'β'),
-    'pɕ͈': ('p', 'ɕ͈'),
-    'mɲ': ('m', 'ɲ'),
-    'nɕʰ': ('n', 'ɕʰ'),
-    'p̚k': ('p̚', 'k')
+    't͡ɕ͈': ('', 't͡ɕ͈'), 'tʰ': ('', 'tʰ'), 'ç': ('', 'ç'), 't͈': ('', 't͈'), 's͈': ('', 's͈'), 'ɸʷ': ('', 'ɸʷ'), 
+    't': ('', 't'), 'ɕʰ': ('', 'ɕʰ'), 'ɸ': ('', 'ɸ'), 'm': ('', 'm'), 'sʰ': ('', 'sʰ'), 'kʰ': ('', 'kʰ'), 
+    'ʃʰ': ('', 'ʃʰ'), 'p͈': ('', 'p͈'), 'ɾ': ('', 'ɾ'), 'kç': ('', 'kç'), 'ɲ': ('', 'ɲ'), 't͡ɕʰ': ('', 't͡ɕʰ'), 
+    'p': ('', 'p'), 't͡ɕ': ('', 't͡ɕ'), 'n': ('', 'n'), 'pʰ': ('', 'pʰ'), 'k͈': ('', 'k͈'), 'ɕ͈': ('', 'ɕ͈'), 
+    'h': ('', 'h'), 'k': ('', 'k'), 'ɦ': ('', 'ɦ'), 'ɡ': ('', 'ɡ'), 'd': ('', 'd'), 'd͡ʑ': ('', 'd͡ʑ'),
+    'ʎ': ('', 'ʎ'), 'b': ('', 'b'), 'ɣ': ('', 'ɣ'), 'β': ('', 'β'), 'ʝ': ('', 'ʝ'),
+    'ɭ': ('ɭ', ''), 'k̚': ('k', ''), 'ŋ': ('ŋ', ''), 'p̚': ('p', ''), 't̚': ('t', ''),
     }
+
 
 def _Korean_Split_Vowel(pronunciation: str):
     if len(pronunciation) == 0:
@@ -283,18 +145,37 @@ def _Korean_Syllablize(pronunciation: str):
     
     syllables = []
     current_consonants = []
+    if any(
+        x in pronunciation and pronunciation[-1] != x
+        for x in ['ɭ', 'k̚', 'p̚', 't̚']
+        ):
+        print(pronunciation)
+        assert False
+
     for phoneme in pronunciation:
         if phoneme in korean_vowels:
-            if len(syllables) > 0 and len(current_consonants) > 1 and current_consonants[0] != 'ŋ':
+            if \
+                len(syllables) > 0 and \
+                (   
+                    len(current_consonants) > 1 or
+                    (len(current_consonants) > 0 and current_consonants[0] in ['ɭ', 'ŋ'])
+                    ):
                 syllables[-1][2].append(current_consonants[0])
-                current_consonants = current_consonants[1:]            
+                current_consonants = current_consonants[1:]
             syllables.append((current_consonants, phoneme, []))
             current_consonants = []
         else:   # consonant
             if phoneme in korean_boundary_dict.keys():
                 current_consonants.extend([x for x in korean_boundary_dict[phoneme] if x != ''])
             else:
-                current_consonants.append(phoneme)
+                is_applied = False
+                for index in range(len(phoneme)):
+                    if phoneme[:index] in korean_boundary_dict.keys() and phoneme[index:] in korean_boundary_dict.keys():
+                        current_consonants.extend([x for x in korean_boundary_dict[phoneme[:index]] if x != ''])
+                        current_consonants.extend([x for x in korean_boundary_dict[phoneme[index:]] if x != ''])
+                        is_applied = True
+                        break
+                assert is_applied, (pronunciation, phoneme)
 
     if len(current_consonants) > 0:
         syllables[-1][2].extend(current_consonants)
