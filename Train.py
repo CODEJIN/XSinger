@@ -17,6 +17,7 @@ from typing import List
 
 from Modules.Modules import RectifiedFlowSVS, Mask_Generate
 from Datasets import Dataset, Inference_Dataset, Collater, Inference_Collater
+from Modules.Guided_Attention import Guided_Attention_Loss
 from hificodec.vqvae import VQVAE
 
 from meldataset import mel_spectrogram
@@ -41,7 +42,7 @@ def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
 
 # sys.excepthook = log_uncaught_exceptions
 
-# torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(True)
 
 class Trainer:
     def __init__(self, hp_path, steps= 0):
@@ -122,6 +123,9 @@ class Trainer:
             language_dict= language_dict,
             pattern_path= self.hp.Train.Train_Pattern.Path,
             metadata_file= self.hp.Train.Train_Pattern.Metadata_File,
+            num_combination= self.hp.Train.Num_Combination,
+            pattern_length_min= self.hp.Train.Pattern_Length.Min,
+            pattern_length_max= self.hp.Train.Pattern_Length.Max,
             accumulated_dataset_epoch= self.hp.Train.Train_Pattern.Accumulated_Dataset_Epoch,
             augmentation_ratio= self.hp.Train.Train_Pattern.Augmentation_Ratio,
             use_pattern_cache= self.hp.Train.Pattern_Cache
@@ -132,6 +136,9 @@ class Trainer:
             language_dict= language_dict,
             pattern_path= self.hp.Train.Eval_Pattern.Path,
             metadata_file= self.hp.Train.Eval_Pattern.Metadata_File,
+            num_combination= self.hp.Train.Num_Combination,
+            pattern_length_min= self.hp.Train.Pattern_Length.Min,
+            pattern_length_max= self.hp.Train.Pattern_Length.Max,
             use_pattern_cache= self.hp.Train.Pattern_Cache,
             accumulated_dataset_epoch= self.hp.Train.Eval_Pattern.Accumulated_Dataset_Epoch,
             )
@@ -155,8 +162,6 @@ class Trainer:
 
         collater = Collater(
             token_dict= token_dict,
-            pattern_length= self.hp.Train.Pattern_Length,
-            hop_size= self.hp.Sound.Hop_Size
             )
         inference_collater = Inference_Collater(
             token_dict= token_dict
@@ -199,12 +204,12 @@ class Trainer:
         self.model_dict['RectifiedFlowSVS_EMA'].Inference = self.model_dict['RectifiedFlowSVS_EMA'].module.Inference
 
         self.criterion_dict = {
-            'MSE': torch.nn.MSELoss().to(self.device),
-            'CE': torch.nn.CrossEntropyLoss().to(self.device)
+            'MSE': torch.nn.MSELoss(reduction= 'none').to(self.device),
+            'GA': Guided_Attention_Loss(),
             }
 
         self.optimizer_dict = {
-            'RectifiedFlowSVS': torch.optim.NAdam(
+            'RectifiedFlowSVS': torch.optim.AdamW(
                 params= self.model_dict['RectifiedFlowSVS'].parameters(),
                 lr= self.hp.Train.Learning_Rate.Initial,
                 betas=(self.hp.Train.ADAM.Beta1, self.hp.Train.ADAM.Beta2),
@@ -237,40 +242,50 @@ class Trainer:
     def Train_Step(
         self,
         tokens: torch.IntTensor,
+        token_lengths: torch.IntTensor,
+        token_on_note_lengths: torch.IntTensor,
         notes: torch.IntTensor,
-        lyric_durations: torch.IntTensor,
-        note_durations: torch.IntTensor,
-        lengths: torch.IntTensor,
+        durations: torch.IntTensor,
+        note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         languages: torch.IntTensor,
-        latent_codes: torch.IntTensor
+        latent_codes: torch.IntTensor,
+        latent_code_lengths: torch.IntTensor,
         ):
         loss_dict = {}
         with self.accelerator.accumulate(self.model_dict['RectifiedFlowSVS']):
-            flows, prediction_flows, prediction_singers = self.model_dict['RectifiedFlowSVS'](
+            flows, prediction_flows, cross_attention_alignments = self.model_dict['RectifiedFlowSVS'](
                 tokens= tokens,
-                notes= notes,
-                lyric_durations= lyric_durations,
-                note_durations= note_durations,
-                lengths= lengths,
-                singers= singers,
                 languages= languages,
-                latent_codes= latent_codes
+                token_lengths= token_lengths,
+                token_on_note_lengths= token_on_note_lengths,
+                notes= notes,
+                durations= durations,
+                note_lengths= note_lengths,
+                singers= singers,
+                latent_codes= latent_codes,
+                latent_code_lengths= latent_code_lengths
                 )
             
-            loss_dict['Diffusion'] = self.criterion_dict['MSE'](
+            latent_code_float_masks = (~Mask_Generate(
+                lengths= latent_code_lengths,
+                max_length= latent_codes.size(2)
+                ).to(latent_codes.device)).float()
+            
+            loss_dict['Diffusion'] = (self.criterion_dict['MSE'](
                 prediction_flows,
                 flows,
+                ) * latent_code_float_masks[:, None, :]).sum() / latent_code_float_masks.sum()
+            loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
+                alignments= cross_attention_alignments,
+                query_lengths= latent_code_lengths,
+                key_lengths= token_lengths
                 )
-            loss_dict['Singer'] = self.criterion_dict['CE'](
-                input= prediction_singers,
-                target= singers.long(),
-                )
-
+            
             self.optimizer_dict['RectifiedFlowSVS'].zero_grad()
             self.accelerator.backward(
-                loss_dict['Diffusion'] # +
-                # loss_dict['Singer']
+                loss_dict['Diffusion'] +
+                loss_dict['Cross_Attention']
                 )
 
             if self.hp.Train.Gradient_Norm > 0.0:
@@ -292,19 +307,28 @@ class Trainer:
             self.scalar_dict['Train']['Loss/{}'.format(tag)] += loss.item()
 
     def Train_Epoch(self):
-        for tokens, notes, lyric_durations, note_durations, lengths, singers, languages, latent_codes in self.dataloader_dict['Train']:
+        for tokens, token_lengths, token_on_note_lengths, \
+            notes, durations, note_lengths, \
+            singers, languages, \
+            latent_codes, latent_code_lengths in self.dataloader_dict['Train']:
             self.Train_Step(
                 tokens= tokens,
+                token_lengths= token_lengths,
+                token_on_note_lengths= token_on_note_lengths,
                 notes= notes,
-                lyric_durations= lyric_durations,
-                note_durations= note_durations,
-                lengths= lengths,
+                durations= durations,
+                note_lengths= note_lengths,
                 singers= singers,
                 languages= languages,
-                latent_codes= latent_codes
+                latent_codes= latent_codes,
+                latent_code_lengths= latent_code_lengths,
                 )
 
-            if self.steps % (math.ceil(len(self.dataloader_dict['Train'].dataset) / self.hp.Train.Train_Pattern.Accumulated_Dataset_Epoch / self.hp.Train.Batch_Size) * self.hp.Train.Learning_Rate.Decay_Epoch) == 0:
+            if self.steps % (math.ceil(
+                len(self.dataloader_dict['Train'].dataset) /
+                self.hp.Train.Train_Pattern.Accumulated_Dataset_Epoch /
+                self.hp.Train.Batch_Size / self.num_gpus
+                ) * self.hp.Train.Learning_Rate.Decay_Epoch) == 0:
                 self.scheduler_dict['RectifiedFlowSVS'].step()
 
             if self.steps % self.hp.Train.Checkpoint_Save_Interval == 0:
@@ -341,33 +365,43 @@ class Trainer:
     def Evaluation_Step(
         self,
         tokens: torch.IntTensor,
+        token_lengths: torch.IntTensor,
+        token_on_note_lengths: torch.IntTensor,
         notes: torch.IntTensor,
-        lyric_durations: torch.IntTensor,
-        note_durations: torch.IntTensor,
-        lengths: torch.IntTensor,
+        durations: torch.IntTensor,
+        note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         languages: torch.IntTensor,
-        latent_codes: torch.IntTensor
+        latent_codes: torch.IntTensor,
+        latent_code_lengths: torch.IntTensor,
         ):
         loss_dict = {}
-        flows, prediction_flows, prediction_singers = self.model_dict['RectifiedFlowSVS_EMA'](
+        flows, prediction_flows, cross_attention_alignments = self.model_dict['RectifiedFlowSVS'](
             tokens= tokens,
-            notes= notes,
-            lyric_durations= lyric_durations,
-            note_durations= note_durations,
-            lengths= lengths,
-            singers= singers,
             languages= languages,
-            latent_codes= latent_codes
+            token_lengths= token_lengths,
+            token_on_note_lengths= token_on_note_lengths,
+            notes= notes,
+            durations= durations,
+            note_lengths= note_lengths,
+            singers= singers,
+            latent_codes= latent_codes,
+            latent_code_lengths= latent_code_lengths
             )
         
-        loss_dict['Diffusion'] = self.criterion_dict['MSE'](
+        latent_code_float_masks = (~Mask_Generate(
+            lengths= latent_code_lengths,
+            max_length= latent_codes.size(2)
+            ).to(latent_codes.device)).float()
+        
+        loss_dict['Diffusion'] = (self.criterion_dict['MSE'](
             prediction_flows,
             flows,
-            )
-        loss_dict['Singer'] = self.criterion_dict['CE'](
-            input= prediction_singers,
-            target= singers.long(),
+            ) * latent_code_float_masks[:, None, :]).sum() / latent_code_float_masks.sum()
+        loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
+            alignments= cross_attention_alignments,
+            query_lengths= latent_code_lengths,
+            key_lengths= token_lengths
             )
 
         for tag, loss in loss_dict.items():
@@ -379,20 +413,26 @@ class Trainer:
         for model in self.model_dict.values():
             model.eval()
 
-        for step, (tokens, notes, lyric_durations, note_durations, lengths, singers, languages, latent_codes) in tqdm(
+        for step, (
+            tokens, token_lengths, token_on_note_lengths,
+            notes, durations, note_lengths, singers, languages,
+            latent_codes, latent_code_lengths
+            ) in tqdm(
             enumerate(self.dataloader_dict['Eval'], 1),
             desc='[Evaluation]',
             total= math.ceil(len(self.dataloader_dict['Eval'].dataset) / self.hp.Train.Batch_Size / self.num_gpus)
             ):
             self.Evaluation_Step(
                 tokens= tokens,
+                token_lengths= token_lengths,
+                token_on_note_lengths= token_on_note_lengths,
                 notes= notes,
-                lyric_durations= lyric_durations,
-                note_durations= note_durations,
-                lengths= lengths,
+                durations= durations,
+                note_lengths= note_lengths,
                 singers= singers,
                 languages= languages,
-                latent_codes= latent_codes
+                latent_codes= latent_codes,
+                latent_code_lengths= latent_code_lengths,
                 )
 
         if self.accelerator.is_main_process:
@@ -402,7 +442,7 @@ class Trainer:
                 }
             self.writer_dict['Evaluation'].add_scalar_dict(self.scalar_dict['Evaluation'], self.steps)
             # self.writer_dict['Evaluation'].add_histogram_model(self.model_dict['RectifiedFlowSVS'], 'RectifiedFlowSVS', self.steps, delete_keywords=[])
-        
+
             index = np.random.randint(0, tokens.size(0))
 
             with torch.inference_mode():
@@ -415,17 +455,19 @@ class Trainer:
 
                 prediction_audios = inference_func(
                     tokens= tokens[index, None],
-                    notes= notes[index, None],
-                    lyric_durations= lyric_durations[index, None],
-                    note_durations= note_durations[index, None],                    
-                    lengths= lengths[index, None],
-                    singers= singers[index, None],
                     languages= languages[index, None],
+                    token_lengths= token_lengths[index, None],
+                    token_on_note_lengths= token_on_note_lengths[index, None],
+                    notes= notes[index, None],
+                    durations= durations[index, None],
+                    note_lengths= note_lengths[index, None],
+                    singers= singers[index, None],
+                    latent_code_lengths= latent_code_lengths[index, None],
                     )
 
-            length = lengths[index].item()
-            audio_length = length * self.hp.Sound.Hop_Size
-            
+            latent_code_length = latent_code_lengths[index].item()
+            audio_length = latent_code_length * self.hp.Sound.Hop_Size
+
             target_audio = target_audios[0, :audio_length].float().clamp(-1.0, 1.0)
             prediction_audio = prediction_audios[0, :audio_length].float().clamp(-1.0, 1.0)
 
@@ -485,12 +527,14 @@ class Trainer:
     def Inference_Step(
         self,
         tokens: torch.IntTensor,
+        token_lengths: torch.IntTensor,
+        token_on_note_lengths: torch.IntTensor,
         notes: torch.IntTensor,
-        lyric_durations: torch.IntTensor,
-        note_durations: torch.IntTensor,
-        lengths: torch.IntTensor,
+        durations: torch.IntTensor,
+        note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         languages: torch.IntTensor,
+        latent_code_lengths: torch.IntTensor,
         lyrics: List[str],
         start_index= 0,
         tag_step= False
@@ -502,21 +546,23 @@ class Trainer:
 
         prediction_audios = inference_func(
             tokens= tokens,
-            notes= notes,
-            lyric_durations= lyric_durations,
-            note_durations= note_durations,
-            lengths= lengths,
-            singers= singers,
             languages= languages,
+            token_lengths= token_lengths,
+            token_on_note_lengths= token_on_note_lengths,
+            notes= notes,
+            durations= durations,
+            note_lengths= note_lengths,
+            singers= singers,
+            latent_code_lengths= latent_code_lengths
             )
         audio_lengths = [
             length * self.hp.Sound.Hop_Size
-            for length in lengths
+            for length in latent_code_lengths
             ]
 
         prediction_mels = [
             mel[:, :length]
-            for mel, length in zip(self.mel_func(prediction_audios).cpu().numpy(), lengths)
+            for mel, length in zip(self.mel_func(prediction_audios).cpu().numpy(), latent_code_lengths)
             ]
         prediction_audios = [
             audio[:length]
@@ -575,20 +621,27 @@ class Trainer:
             model.eval()
 
         batch_size = self.hp.Inference_Batch_Size or self.hp.Train.Batch_Size
-        for step, (tokens, notes, lyric_durations, note_durations, lengths, singers, languages, lyrics) in tqdm(
+        for step, (
+            tokens, token_lengths, token_on_note_lengths,
+            notes, durations, note_lengths,
+            singers, languages,
+            latent_code_lengths, lyrics
+            ) in tqdm(
             enumerate(self.dataloader_dict['Inference']),
             desc='[Inference]',
             total= math.ceil(len(self.dataloader_dict['Inference'].dataset) / batch_size)
             ):
             self.Inference_Step(
                 tokens= tokens,
+                token_lengths= token_lengths,
+                token_on_note_lengths= token_on_note_lengths,
                 notes= notes,
-                lyric_durations= lyric_durations,
-                note_durations= note_durations,
-                lengths= lengths,
+                durations= durations,
+                note_lengths= note_lengths,
                 singers= singers,
                 languages= languages,
-                lyrics= lyrics, 
+                latent_code_lengths= latent_code_lengths,
+                lyrics= lyrics,
                 start_index= step * batch_size
                 )
 

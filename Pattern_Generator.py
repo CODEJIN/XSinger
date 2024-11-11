@@ -1230,15 +1230,15 @@ def AIHub_Metabuild(
         total= len(paths),
         desc= 'AIHub_Metabuild'
         ):
-        _, singer, _, _, _, genre, music_label = os.path.splitdrive(os.path.basename(wav_path))[0].strip().split('_')
+        _, singer, _, _, _, genre, music_label = os.path.splitext(os.path.basename(wav_path))[0].strip().split('_')
         singer = 'AMB_S' + singer
-        genre = genre.capicalize()
+        genre = genre.capitalize()
 
         if any([
             os.path.exists(os.path.join(x, 'AIHub_Metabuild', singer, f'{music_label}.pickle').replace('\\', '/'))
             for x in [hyper_paramters.Train.Eval_Pattern.Path, hyper_paramters.Train.Train_Pattern.Path]
             ] + [
-                os.path.exists(os.path.join('./note_error/AIHub_Metabuild', singer, f'{music_label}.png'))
+            os.path.exists(os.path.join('./note_error/AIHub_Metabuild', singer, f'{music_label}.png'))
             ]):
             continue
 
@@ -1278,16 +1278,21 @@ def AIHub_Metabuild(
                 change_previous_coda = False
                 if previous_coda == '': # 단순 장음
                     onset = 'ㅇ'
-                    nuclues = nucleus_long_sound_convert_dict.get(previous_nucleus, previous_nucleus)
+                    nucleus = nucleus_long_sound_convert_dict.get(previous_nucleus, previous_nucleus)
                     coda = ''
-                elif previous_coda != '' and next_onset == 'ㅇ': # 장음의 중간일 가능성이 높음, previous coda가 이쪽으로 옮겨져야 함
+                elif previous_coda != '' and next_onset == 'ㅇ' and previous_nucleus == next_nucleus: # 장음의 중간일 가능성이 높음, previous coda가 이쪽의 onset으로 옮겨져야 함
                     onset = previous_coda
-                    nuclues = nucleus_long_sound_convert_dict.get(previous_nucleus, previous_nucleus)
+                    nucleus = nucleus_long_sound_convert_dict.get(previous_nucleus, previous_nucleus)
                     coda = ''
+                    change_previous_coda = True
+                elif previous_coda != '' and next_onset == 'ㅇ' and previous_nucleus != next_nucleus: # 장음의 끝일 가능성이 높음, previous coda가 이쪽의 coda로 옮겨져야 함
+                    onset = 'ㅇ'
+                    nucleus = nucleus_long_sound_convert_dict.get(previous_nucleus, previous_nucleus)
+                    coda = previous_coda
                     change_previous_coda = True
                 elif previous_coda != '' and next_onset != 'ㅇ': # 세 음절 중 소실된 가운데 음절일 가능성이 높음, previous coda가 이쪽으로 옮겨져야 함
                     onset = previous_coda
-                    nucleus =  'ㅡ'
+                    nucleus = 'ㅡ'
                     coda = ''
                     change_previous_coda = True
 
@@ -1329,7 +1334,10 @@ def AIHub_Metabuild(
             else:
                 break
         audio = audio[:int(sum([x[0] for x in music]) * hyper_paramters.Sound.Sample_Rate)]    # remove last silence
-        
+        if abs(audio.shape[0] // hyper_paramters.Sound.Sample_Rate - sum([x[0] for x in music])) > 1.0:
+            logging.warning(f'\'{wav_path}\' and \'{json_path}\' is not matching: {audio.shape[0] // hyper_paramters.Sound.Sample_Rate}, {sum([x[0] for x in music])}')
+            continue
+
         # This is to avoid to use wrong data.
         if initial_audio_length * 0.5 > audio.shape[0]:
             continue
@@ -1596,7 +1604,7 @@ def Pattern_File_Generate(
             ]).astype(np.float16)
 
     note_from_midi = Calc_Note_from_Music(music)
-    
+
     note_from_f0_without_0, note_from_midi_without_0 = note_from_f0[(note_from_f0 > 0) * (note_from_midi > 0)], note_from_midi[(note_from_f0 > 0) * (note_from_midi > 0)]
     note_error_value = np.abs(note_from_f0_without_0 - note_from_midi_without_0).mean()
 
@@ -1692,6 +1700,7 @@ def Pattern_File_Generate(
         protocol= 4
         )
 
+    torch.cuda.empty_cache()
     return True
 
 def Note_Predictor(f0):
@@ -1754,6 +1763,7 @@ def Metadata_Generate(
 
     for root, _, files in os.walk(pattern_path, followlinks= True):
         for file in files:
+            # print(os.path.join(root, file).replace('\\', '/'))
             with open(os.path.join(root, file).replace('\\', '/'), 'rb') as f:
                 pattern_dict = pickle.load(f)
             file = os.path.join(root, file).replace('\\', '/').replace(pattern_path, '').lstrip('/')
@@ -1778,10 +1788,6 @@ def Metadata_Generate(
             if not pattern_dict['Singer'] in f0_dict.keys():
                 f0_dict[pattern_dict['Singer']] = []
             
-            print(
-                os.path.join(root, file).replace('\\', '/'),
-                torch.from_numpy(pattern_dict['Latent_Code']).T[None].long().to(device).shape
-                )
             latent = hificodec.quantizer.embed(torch.from_numpy(pattern_dict['Latent_Code']).T[None].long().to(device))[0].cpu()
             latent_dict[pattern_dict['Singer']]['Min'] = min(latent_dict[pattern_dict['Singer']]['Min'], latent.min().item())
             latent_dict[pattern_dict['Singer']]['Max'] = max(latent_dict[pattern_dict['Singer']]['Max'], latent.max().item())
@@ -1861,7 +1867,8 @@ if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
     argparser.add_argument('-csd', '--csd_path', required= False)
     argparser.add_argument('-csde', '--csd_eng_path', required= False)
-    argparser.add_argument('-am', '--aihub_mediazen_path', required= False)
+    argparser.add_argument('-amz', '--aihub_mediazen_path', required= False)
+    argparser.add_argument('-amb', '--aihub_metabuild_path', required= False)
     argparser.add_argument('-m4', '--m4singer_path', required= False)
     argparser.add_argument('-nus48e', '--nus48e_path', required= False)
     argparser.add_argument('-kiritan', '--kiritan_path', required= False)
@@ -1893,7 +1900,7 @@ if __name__ == '__main__':
             dataset_path= args.aihub_mediazen_path,
             verbose= args.verbose
             )
-        
+
     if args.m4singer_path:
         M4Singer(
             hyper_paramters= hp,
@@ -1915,14 +1922,22 @@ if __name__ == '__main__':
             verbose= args.verbose
             )
 
+    if args.aihub_metabuild_path:
+        AIHub_Metabuild(
+            hyper_paramters= hp,
+            dataset_path= args.aihub_metabuild_path,
+            verbose= args.verbose
+            )
+
     Metadata_Generate(hp, False)
     Metadata_Generate(hp, True)
 
 # python -m Pattern_Generator -hp Hyper_Parameters.yaml \
 #   -csd /mnt/f/Rawdata_Music/CSD_Fix \
 #   -csde /mnt/f/Rawdata_Music/CSD_1.1/english \
-#   -am /mnt/f/Rawdata_Music/AIHub_Mediazen \
+#   -amz /mnt/f/Rawdata_Music/AIHub_Mediazen \
 #   -m4 /mnt/f/Rawdata_Music/m4singer \
 #   -nus48e /mnt/f/Rawdata_Music/NUS48E \
 #   -kiritan /mnt/f/Rawdata_Music/Kiritan \
+#   -amb /mnt/f/Rawdata_Music/CSD_Fix \
 #   -verbose

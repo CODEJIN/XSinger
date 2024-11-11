@@ -4,22 +4,58 @@ Sound:
     F0_Min: 65  # C2
     F0_Max: 2094    # C7
 
-Tokens: 60
+Tokens: 124
 Notes: 128
-Durations: 15000
-Genres: 1
-Singers: 1
-Languages: 1
+Durations: 10000
+Genres: 7
+Singers: 144
+Languages: 4
 Audio_Codec_Size: 512
 
 Encoder:
     Size: 384
-    Transformer:
-        Stack: 12
+    Lyric_Encoder:
+        Stack: 4
+        Head: 2
+        Dropout_Rate: 0.1
+        Beta_Distribution_Concentration: 0.2
+        FFN:
+            Kernel_Size: 7
+            Dropout_Rate: 0.1
+        Residual_Conv:
+            Stack: 2
+            Kernel_Size: 5
+            Dropout_Rate: 0.1
+    Melody_Encoder:
+        Stack: 4
         Head: 2
         Dropout_Rate: 0.1
         FFN:
-            Kernel_Size: 3
+            Kernel_Size: 7
+            Dropout_Rate: 0.1
+        Residual_Conv:
+            Stack: 2
+            Kernel_Size: 5
+            Dropout_Rate: 0.1
+    Phoneme_to_Note_Encoder:
+        Stack: 2
+        Head: 2
+        Dropout_Rate: 0.1
+        FFN:
+            Kernel_Size: 7
+            Dropout_Rate: 0.1
+        Residual_Conv:
+            Stack: 2
+            Kernel_Size: 5
+            Dropout_Rate: 0.1
+    Cross_Attention:
+        Head: 2
+    Prior_Encoder:
+        Stack: 4
+        Head: 2
+        Dropout_Rate: 0.1
+        FFN:
+            Kernel_Size: 7
             Dropout_Rate: 0.1
         Residual_Conv:
             Stack: 2
@@ -53,7 +89,7 @@ Singer_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.CSDK/Singer_Info.yaml'
 Genre_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.CSDK/Genre_Info.yaml'
 Language_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.CSDK/Language_Info.yaml'
 Train:
-    Pattern_Cache: false
+    Pattern_Cache: true
     Train_Pattern:
         Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.CSDK/Train'
         Metadata_File: 'METADATA.PICKLE'
@@ -65,7 +101,10 @@ Train:
         Accumulated_Dataset_Epoch: 32   # When singer is 1, evaluation pattern is also 1. Because offset is selected randomly, this is meaningful.
     Num_Workers: 2
     Batch_Size: 32
-    Pattern_Length: 512
+    Pattern_Length:
+        Min: 384
+        Max: 768
+    Num_Combination: 3
     Learning_Rate:
         Initial: 1.0e-4
         Decay: 0.999875

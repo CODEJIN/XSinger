@@ -1,5 +1,6 @@
 import torch
 import math
+from enum import Enum
 from typing import Optional
 
 class Lambda(torch.nn.Module):
@@ -37,67 +38,109 @@ class RMSNorm(torch.nn.Module):
 
         return output * self.scale.view(*shape)
 
-class Scale(torch.nn.Module):
-    def __init__(
-        self,
-        condition_features: int,
-        *args,
-        **kwargs
-        ):
-        super().__init__(*args, **kwargs)
-        self.condition = torch.nn.Sequential(
-            Lambda(lambda x: x.unsqueeze(2)),
-            Conv_Init(torch.nn.Conv1d(
-                in_channels= condition_features,
-                out_channels= self.num_features * 2,
-                kernel_size= 1,
-                ), w_init_gain= 'relu'),
-            torch.nn.SiLU()
-            )
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        conditions: torch.Tensor
-        ):
-        x = super().forward(x)
-        betas, gammas = self.condition(conditions).chunk(chunks= 2, dim= 1)
-        x = (gammas + 1) * x + betas
-
-        return x
-    
-class Scaling(torch.nn.Module):
+class Conditional_LayerNorm(torch.nn.LayerNorm):
     def __init__(
         self,
         channels: int,
         condition_channels: int,
-        use_shift: bool= True
+        eps: float= 1e-5,
+        bias: bool= True,
+        device= None,
+        dtype= None
         ):
-        super().__init__()
-        self.use_shift = use_shift
-
-        self.silu = torch.nn.SiLU()
-        self.conv = Conv_Init(torch.nn.Conv1d(
-            in_channels= condition_channels,
-            out_channels= channels * (1 + use_shift),
-            kernel_size= 1,
-            ), w_init_gain= 'zero')
+        super().__init__(
+            normalized_shape= channels,
+            eps= eps,
+            elementwise_affine= False,
+            bias= bias,
+            device= device,
+            dtype= dtype,
+            )
+        
+        self.affine = Conv_Init(torch.nn.Linear(
+            in_features= condition_channels,
+            out_features= channels * 2,
+            bias= True
+            ), w_init_gain= 'linear')
+        self.affine.bias.data[:channels] = 1
+        self.affine.bias.data[channels:] = 0        
 
     def forward(
         self,
-        x: torch.Tensor,
-        conditions: torch.Tensor
+        x: torch.FloatTensor,
+        conditions: torch.FloatTensor
+        ) -> torch.FloatTensor:
+        '''
+        x: [Batch, Time, X_d],
+        conditions: [Batch, Time, Cond_d]
+        '''
+        x = super().forward(x)  # [Batch, Time, X_d]
+
+        gammas, betas = self.affine(conditions).chunk(chunks= 2, dim= 2)    # [Batch, Time, X_d] * 2
+        x = gammas * x + betas
+
+        return x
+
+class Mixed_LayerNorm(torch.nn.LayerNorm):
+    def __init__(
+        self,
+        channels: int,
+        condition_channels: int,
+        beta_distribution_concentration: float,
+        eps: float= 1e-5,
+        bias: bool= True,
+        device= None,
+        dtype= None
         ):
-        conditions = self.silu(conditions)
-        conditions = self.conv(conditions)
+        super().__init__(
+            normalized_shape= channels,
+            eps= eps,
+            elementwise_affine= False,
+            bias= bias,
+            device= device,
+            dtype= dtype,
+            )
+        
+        self.beta_distribution = torch.distributions.Beta(
+            beta_distribution_concentration,
+            beta_distribution_concentration
+            )
 
-        if self.use_shift:
-            scales, shifts = conditions.chunk(chunks= 2, dim= 1)
-        else:
-            scales = conditions
-            shifts = torch.zeros_like(scales)
+        self.affine = Conv_Init(torch.nn.Linear(
+            in_features= condition_channels,
+            out_features= channels * 2,
+            bias= True
+            ), w_init_gain= 'linear')
+        self.affine.bias.data[:channels] = 1
+        self.affine.bias.data[channels:] = 0        
 
-        return x * (1 + scales) + shifts
+    def forward(
+        self,
+        x: torch.FloatTensor,
+        conditions: torch.FloatTensor
+        ) -> torch.FloatTensor:
+        '''
+        x: [Batch, Time, X_d],
+        conditions: [Batch, Time, Cond_d]
+        '''
+        if not self.training:
+            return x
+
+        x = super().forward(x)  # [Batch, Time, X_d]
+
+        betas, gammas = self.affine(conditions).chunk(chunks= 2, dim= 2)    # [Batch, Time, X_d] * 2
+        suffile_indices = torch.randperm(conditions.size(1))
+        shuffled_betas = betas[:, suffile_indices, :]
+        shuffled_gammas = gammas[:, suffile_indices, :]
+
+        beta_samples = self.beta_distribution.sample((x.size(0), 1, 1)).to(x.device) # [Batch, 1, 1]
+        
+        mixed_betas = beta_samples * betas + (1 - beta_samples) * shuffled_betas
+        mixed_gammas = beta_samples * gammas + (1 - beta_samples) * shuffled_gammas
+
+        x = mixed_gammas * x + mixed_betas
+
+        return x
 
 class LightweightConv1d(torch.nn.Module):
     '''
@@ -198,6 +241,11 @@ class FairseqDropout(torch.nn.Module):
         else:
             return x
 
+class Norm_Type(Enum):
+    LayerNorm= 0
+    Conditional_LayerNorm= 1
+    Mixed_LayerNorm= 2
+
 class FFT_Block(torch.nn.Module):
     def __init__(
         self,
@@ -207,41 +255,78 @@ class FFT_Block(torch.nn.Module):
         residual_conv_kernel_size: int,        
         ffn_kernel_size: int,
         residual_conv_dropout_rate: float= 0.1,
-        ffn_dropout_rate: float= 0.1
+        ffn_dropout_rate: float= 0.1,
+        norm_type: Norm_Type= Norm_Type.LayerNorm,
+        condition_channels: Optional[float]= None,
+        beta_distribution_concentration: Optional[float]= None
         ) -> None:
         super().__init__()
+        self.norm_type = norm_type
 
         self.attention = torch.nn.MultiheadAttention(
             embed_dim= channels,
             num_heads= num_head
-            )        
-        self.attention_norm = torch.nn.LayerNorm(channels)
+            )
+        
+        if norm_type == Norm_Type.LayerNorm:
+            self.attention_norm = torch.nn.LayerNorm(channels)
+        elif norm_type == Norm_Type.Conditional_LayerNorm:
+            self.attention_norm = Conditional_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels
+                )
+        elif norm_type == Norm_Type.Mixed_LayerNorm:
+            self.attention_norm = Mixed_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels,
+                beta_distribution_concentration= beta_distribution_concentration
+                )
         
         self.residual_conv_blocks = torch.nn.ModuleList([
             FFN(
                 channels= channels,
                 kernel_size= residual_conv_kernel_size,
-                droput_rate= residual_conv_dropout_rate
+                droput_rate= residual_conv_dropout_rate,
+                norm_type= norm_type,
+                condition_channels= condition_channels,
+                beta_distribution_concentration= beta_distribution_concentration
                 )
             for _ in range(residual_conv_stack)
             ])
         
-        self.norm = torch.nn.LayerNorm(channels)
+        if norm_type == Norm_Type.LayerNorm:
+            self.norm = torch.nn.LayerNorm(channels)
+        elif norm_type == Norm_Type.Conditional_LayerNorm:
+            self.norm = Conditional_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels
+                )
+        elif norm_type == Norm_Type.Mixed_LayerNorm:
+            self.norm = Mixed_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels,
+                beta_distribution_concentration= beta_distribution_concentration
+                )
+
         self.ffn = FFN(
             channels= channels,
             kernel_size= ffn_kernel_size,
-            droput_rate= ffn_dropout_rate
+            droput_rate= ffn_dropout_rate,
+            norm_type= norm_type,
+            condition_channels= condition_channels,
+            beta_distribution_concentration= beta_distribution_concentration
             )
 
     def forward(
         self,
-        x: torch.Tensor,
-        lengths: Optional[torch.Tensor]= None
-        ) -> torch.Tensor:
+        x: torch.FloatTensor,
+        conditions: Optional[torch.FloatTensor]= None,
+        lengths: Optional[torch.FloatTensor]= None,
+        ) -> torch.FloatTensor:
         '''
-        x: [B, X_c, X_t]
+        x: [B, X_d, X_t]
+        conditions: [B, C_d, X_t]
         lengths: [B]
-
         '''
         masks = None
         float_masks = 1.0
@@ -250,24 +335,45 @@ class FFT_Block(torch.nn.Module):
             float_masks = (~masks).unsqueeze(1).float()   # float mask, [Batch, 1, X_t]
 
         # attention block
-        residuals = x_attentions = x.permute(2,0,1).contiguous()
+        residuals = x_attentions = x.permute(2, 0, 1).contiguous()
         x_attentions, _ = self.attention(
             query= x_attentions,
             key= x_attentions,
             value= x_attentions,
             key_padding_mask= masks
-            )
-        x_attentions = self.attention_norm(x_attentions + residuals).permute(1, 2, 0) * float_masks
+            )   # [X_t, X_d, Batch]
         
+        if self.norm_type == Norm_Type.LayerNorm:
+            x_attentions = self.attention_norm(x_attentions + residuals).permute(1, 2, 0) * float_masks
+        elif self.norm_type in [Norm_Type.Conditional_LayerNorm, Norm_Type.Mixed_LayerNorm]:
+            x_attentions = self.attention_norm(
+                x= (x_attentions + residuals).permute(1, 0, 2),
+                conditions= conditions.mT
+                ).mT * float_masks
+
         # conv block
         x_convs = x
         for block in self.residual_conv_blocks:
-            x_convs = block(x_convs, float_masks)
-        
-        residuals = x = self.norm((x_attentions + x_convs).mT).mT * float_masks
+            x_convs = block(
+                x= x_convs,
+                conditions= conditions,
+                float_masks= float_masks
+                )
+
+        if self.norm_type == Norm_Type.LayerNorm:
+            x = self.norm((x_attentions + x_convs).mT).mT * float_masks
+        elif self.norm_type in [Norm_Type.Conditional_LayerNorm, Norm_Type.Mixed_LayerNorm]:
+            x = self.norm(
+                x= (x_attentions + x_convs).mT,
+                conditions= conditions.mT
+                ).mT * float_masks
         
         # feed forward
-        x = self.ffn(x, float_masks)
+        x = self.ffn(
+            x= x,
+            conditions= conditions,
+            float_masks= float_masks
+            )
         
         return x    # [B, X_c, X_t]
 
@@ -276,9 +382,14 @@ class FFN(torch.nn.Module):
         self,
         channels: int,
         kernel_size: int,
-        droput_rate: float= 0.0
+        droput_rate: float= 0.0,
+        norm_type: Norm_Type= Norm_Type.LayerNorm,
+        condition_channels: Optional[int]= None,
+        beta_distribution_concentration: Optional[float]= None,
         ) -> None:
         super().__init__()
+        self.norm_type = norm_type
+
         self.conv_0 = Conv_Init(torch.nn.Conv1d(
             in_channels= channels,
             out_channels= channels,
@@ -294,23 +405,43 @@ class FFN(torch.nn.Module):
             padding= (kernel_size - 1) // 2,
             bias= False
             )
-        self.norm = torch.nn.LayerNorm(channels)
+
+        if norm_type == Norm_Type.LayerNorm:
+            self.norm = torch.nn.LayerNorm(channels)
+        elif norm_type == Norm_Type.Conditional_LayerNorm:
+            self.norm = Conditional_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels
+                )
+        elif norm_type == Norm_Type.Mixed_LayerNorm:
+            self.norm = Mixed_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels,
+                beta_distribution_concentration= beta_distribution_concentration
+                )
         
         self.dropout = torch.nn.Dropout(p= droput_rate)
 
     def forward(
         self,
         x: torch.Tensor,
-        float_masks: torch.FloatTensor
+        conditions: Optional[torch.FloatTensor]= None,
+        float_masks: Optional[torch.FloatTensor]= 1.0,
         ):
         residuals = x
-
         x = self.conv_0(x * float_masks)
         x = self.gelu(x)
         x = self.dropout(x)
         x = self.conv_1(x * float_masks)
         x = self.dropout(x)
-        x = self.norm((x + residuals).mT).mT * float_masks
+
+        if self.norm_type == Norm_Type.LayerNorm:
+            x = self.norm((x + residuals).mT).mT * float_masks
+        elif self.norm_type in [Norm_Type.Conditional_LayerNorm, Norm_Type.Mixed_LayerNorm]:
+            x = self.norm(
+                x= (x + residuals).mT,
+                conditions= conditions.mT
+                ).mT * float_masks
 
         return x
 

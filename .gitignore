@@ -13,3 +13,4 @@ dac/
 VCTK_Load.pickle
 note_error/
 note_fix/
+.vscode/settings.json
