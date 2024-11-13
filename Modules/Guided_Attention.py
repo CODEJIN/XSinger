@@ -13,7 +13,9 @@ class Guided_Attention_Loss(torch.nn.Module):
         query_lengths: [Batch]
         key_lengths: [Batch]
         '''
-        return (alignments * self.Get_Soft_Masks(query_lengths, key_lengths).to(alignments.device)).mean()
+        soft_masks = self.Get_Soft_Masks(query_lengths, key_lengths).to(alignments.device)
+        loss = (alignments * soft_masks).sum() / (query_lengths * key_lengths).sum()
+        return loss
 
     def Get_Soft_Masks(self, query_lengths, key_lengths):
         query_lengths = query_lengths.cpu().numpy()

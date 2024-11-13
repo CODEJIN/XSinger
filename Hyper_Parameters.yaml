@@ -109,6 +109,8 @@ Train:
         Initial: 1.0e-4
         Decay: 0.999875
         Decay_Epoch: 100
+        Lambda:
+            Cross_Attention: 10.0
     ADAM:
         Beta1: 0.9
         Beta2: 0.999

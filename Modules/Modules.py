@@ -13,10 +13,14 @@ class RectifiedFlowSVS(torch.nn.Module):
     def __init__(
         self,
         hyper_parameters: Namespace,
-        hificodec: VQVAE
+        hificodec: VQVAE,
+        latent_min: float,
+        latent_max: float
         ):
         super().__init__()
         self.hp = hyper_parameters
+        self.latent_min = latent_min
+        self.latent_max = latent_max
 
         self.encoder = Encoder(self.hp)
 
@@ -40,6 +44,7 @@ class RectifiedFlowSVS(torch.nn.Module):
         ):
         with torch.no_grad():
             latents = self.hificodec.quantizer.embed(latent_codes.mT).detach()
+            latents = (latents - self.latent_min) / (self.latent_max - self.latent_min) * 2.0 - 1.0
 
         encodings, singers, cross_attention_alignments = self.encoder(
             tokens= tokens,
@@ -75,7 +80,7 @@ class RectifiedFlowSVS(torch.nn.Module):
         latent_code_lengths: torch.IntTensor,
         diffusion_steps: int= 16
         ):
-        encodings, singers, _ = self.encoder(
+        encodings, singers, cross_attention_alignments = self.encoder(
             tokens= tokens,
             languages= languages,
             token_lengths= token_lengths,
@@ -93,6 +98,7 @@ class RectifiedFlowSVS(torch.nn.Module):
             lengths= latent_code_lengths,
             steps= diffusion_steps,
             )
+        latents = (latents + 1.0) / 2.0 * (self.latent_max - self.latent_min) + self.latent_min
 
         # Performing VQ to correct the incomplete predictions of diffusion.
         *_, latent_codes = self.hificodec.quantizer(latents)
@@ -100,7 +106,7 @@ class RectifiedFlowSVS(torch.nn.Module):
         latent_codes = torch.stack(latent_codes, 2)
         audios = self.hificodec(latent_codes)[:, 0, :]
 
-        return audios
+        return audios, cross_attention_alignments
 
     def train(self, mode: bool= True):
         super().train(mode= mode)
