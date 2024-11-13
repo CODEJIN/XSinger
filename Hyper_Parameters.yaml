@@ -108,7 +108,7 @@ Train:
     Learning_Rate:
         Initial: 1.0e-4
         Decay: 0.999875
-        Decay_Epoch: 100
+        Decay_Epoch: 1
         Lambda:
             Cross_Attention: 10.0
     ADAM:
@@ -118,8 +118,8 @@ Train:
     Weight_Decay: 1.0e-6
     Accumulated_Gradient_Step: 1 # 25    
     Gradient_Norm: 1.0
-    Max_Step: 300000
-    Checkpoint_Save_Interval: 5000
+    Max_Step: 1000000
+    Checkpoint_Save_Interval: 10000
     Logging_Interval: 1
     Evaluation_Interval: 1000
     Inference_Interval: 5000
