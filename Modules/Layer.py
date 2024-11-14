@@ -123,12 +123,13 @@ class Mixed_LayerNorm(torch.nn.LayerNorm):
         x: [Batch, Time, X_d],
         conditions: [Batch, Time, Cond_d]
         '''
-        if not self.training:
-            return x
-
         x = super().forward(x)  # [Batch, Time, X_d]
 
         betas, gammas = self.affine(conditions).chunk(chunks= 2, dim= 2)    # [Batch, Time, X_d] * 2
+        
+        if not self.training:
+            return gammas * x + betas
+
         suffile_indices = torch.randperm(conditions.size(1))
         shuffled_betas = betas[:, suffile_indices, :]
         shuffled_gammas = gammas[:, suffile_indices, :]
