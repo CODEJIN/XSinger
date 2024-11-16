@@ -104,6 +104,7 @@ Train:
     Pattern_Length:
         Min: 384
         Max: 768
+    Guided_Attention_Sigma: 0.35
     Num_Combination: 3
     Learning_Rate:
         Initial: 1.0e-4

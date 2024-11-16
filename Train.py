@@ -214,7 +214,7 @@ class Trainer:
 
         self.criterion_dict = {
             'MSE': torch.nn.MSELoss(reduction= 'none').to(self.device),
-            'GA': Guided_Attention_Loss(),
+            'GA': Guided_Attention_Loss(sigma= self.hp.Train.Guided_Attention_Sigma),
             }
 
         self.optimizer_dict = {
