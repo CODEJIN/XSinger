@@ -3,6 +3,8 @@ import math
 from enum import Enum
 from typing import Optional
 
+from einops import einsum
+
 class Lambda(torch.nn.Module):
     def __init__(self, lambd):
         super().__init__()
@@ -268,7 +270,7 @@ class FFT_Block(torch.nn.Module):
             embed_dim= channels,
             num_heads= num_head
             )
-        
+
         if norm_type == Norm_Type.LayerNorm:
             self.attention_norm = torch.nn.LayerNorm(channels)
         elif norm_type == Norm_Type.Conditional_LayerNorm:
@@ -343,6 +345,7 @@ class FFT_Block(torch.nn.Module):
             value= x_attentions,
             key_padding_mask= masks
             )   # [X_t, X_d, Batch]
+        # torch._C._nn.scaled_dot_product_attention
         
         if self.norm_type == Norm_Type.LayerNorm:
             x_attentions = self.attention_norm(x_attentions + residuals).permute(1, 2, 0) * float_masks
@@ -493,7 +496,69 @@ class Prompt_Block(FFT_Block):
         
         return x    # [B, X_c, X_t]
 
+class LinearAttention(torch.nn.Module):
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        ) -> None:
+        super().__init__()
+        assert embed_dim % num_heads == 0, 'embed_dim must be divisible by num_heads.'
 
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.scaling = self.head_dim ** -0.5
+
+        self.query = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+        self.key = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+        self.value = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+        
+        self.projection = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor]= None
+        ) -> torch.FloatTensor:
+        query_seq_len, batch_size, _ = query.size()
+        key_seq_len, _, _ = key.size()
+
+        queries = self.query(query).view(query_seq_len, batch_size, self.num_heads, self.head_dim)
+        keys = self.key(key).view(key_seq_len, batch_size, self.num_heads, self.head_dim)
+        values = self.value(value).view(key_seq_len, batch_size, self.num_heads, self.head_dim)
+
+        queries = (torch.nn.functional.elu(queries) + 1.0) * self.scaling
+        keys = (torch.nn.functional.elu(keys) + 1.0)
+
+        if not key_padding_mask is None:
+            key_padding_mask = key_padding_mask.T[:, :, None, None] # [Key_t, Batch, 1, 1]
+            keys.masked_fill_(key_padding_mask, 0.0)
+
+        keys_and_values = einsum(keys, values, 'key_length batch head key_d, key_length batch head value_d -> batch head key_d value_d')
+        keys_sum = keys.sum(dim= 0, keepdim= True)  # [1, Batch, Head_n, Head_d]
+        contexts = einsum(queries, keys_and_values, 'query_length batch head query_d, batch head query_d value_d -> query_length batch head value_d')
+        normalizer = einsum(queries, keys_sum, 'query_length batch head query_d, x batch head query_d -> query_length batch head x') + 1e-5
+
+        contexts = contexts / normalizer
+        contexts = contexts.contiguous().view(query_seq_len, batch_size, self.embed_dim)
+        contexts = self.projection(contexts)
+
+        return contexts
 
 class RotaryPositionalEncoding(torch.nn.Module):
     def __init__(self, channels: int):

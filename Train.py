@@ -284,7 +284,7 @@ class Trainer:
             loss_dict['Diffusion'] = (self.criterion_dict['MSE'](
                 prediction_flows,
                 flows,
-                ) * latent_code_float_masks[:, None, :]).sum() / latent_code_float_masks.sum()
+                ) * latent_code_float_masks[:, None, :]).sum() / latent_code_float_masks.sum() / prediction_flows.size(1)
             loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
                 alignments= cross_attention_alignments,
                 query_lengths= latent_code_lengths,
@@ -407,7 +407,7 @@ class Trainer:
         loss_dict['Diffusion'] = (self.criterion_dict['MSE'](
             prediction_flows,
             flows,
-            ) * latent_code_float_masks[:, None, :]).sum() / latent_code_float_masks.sum()
+            ) * latent_code_float_masks[:, None, :]).sum() / latent_code_float_masks.sum() / prediction_flows.size(1)
         loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
             alignments= cross_attention_alignments,
             query_lengths= latent_code_lengths,

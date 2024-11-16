@@ -138,6 +138,7 @@ class Encoder(torch.nn.Module):
             embed_dim= self.hp.Encoder.Size,
             num_heads= self.hp.Encoder.Cross_Attention.Head
             )
+        self.cross_attention_norm = torch.nn.LayerNorm(self.hp.Encoder.Size)
 
         self.prior_encoder = Prior_Encoder(self.hp)
 
@@ -204,6 +205,7 @@ class Encoder(torch.nn.Module):
                 max_length= torch.ones_like(lyric_encodings[0, 0]).sum()
                 )
             )   # [Dec_t, Batch, Enc_d], [Batch, Dec_t, Token_t]
+        encodings = self.cross_attention_norm(encodings)
         encodings = encodings.permute(1, 2, 0) # [Batch, Enc_d, Dec_t]
         
         singers = singers @ token_to_note_alignments @ note_to_decoding_alignments  # [Batch, Enc_d, Dec_t]
