@@ -3,7 +3,7 @@ import math
 from enum import Enum
 from typing import Optional
 
-from einops import einsum
+from einops import einsum, rearrange
 
 class Lambda(torch.nn.Module):
     def __init__(self, lambd):
@@ -560,34 +560,163 @@ class LinearAttention(torch.nn.Module):
 
         return contexts
 
-class RotaryPositionalEncoding(torch.nn.Module):
-    def __init__(self, channels: int):
-        super().__init__()
-        self.channels = channels
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2).float() / channels))
-        self.register_buffer('inv_freq', inv_freq)
+class MultiHeadAttentionWithRoPE(torch.nn.Module):
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        k_dim: Optional[int]= None,
+        v_dim: Optional[int]= None,
+        ):
+        super().__init__()        
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
 
-    def forward(self, x):
-        seq_length = x.size(0)
-        t = torch.arange(
-            seq_length,
-            dtype= self.inv_freq.dtype,
-            device=x.device
-            )
-        freqs = torch.einsum('i,j->ij', t, self.inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1)  # (seq_length, dim)
+        assert embed_dim % num_heads == 0, 'embed_dim must be divisible by num_heads'
+        assert self.head_dim % 2 == 0, 'head_dim must be divisible by 2 for RoPE'
         
-        cos_emb = emb.cos().unsqueeze(1)  # (seq_length, 1, dim)
-        sin_emb = emb.sin().unsqueeze(1)  # (seq_length, 1, dim)
+        k_dim = k_dim or embed_dim
+        v_dim = v_dim or k_dim
+        
+        self.q_proj = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+        self.k_proj = Conv_Init(
+            torch.nn.Linear(k_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+        self.v_proj = Conv_Init(
+            torch.nn.Linear(v_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+        
+        self.o_proj = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
 
-        x_rotated = x * cos_emb + self.rotate_half(x) * sin_emb
+    def forward(
+        self,
+        query: torch.FloatTensor,
+        key: torch.FloatTensor,
+        value: torch.FloatTensor,
+        key_padding_mask: Optional[torch.Tensor]= None
+        ):
+        '''
+        query: [Query_t, Batch, Query_d]
+        key: [Key_t, Batch, Key_d]
+        value: [Value_t, Batch, Value_d], Key_t == Value_t
+        '''
+        query_lengths, batch_size, _ = query.size()
+        key_lengths, _, _ = key.size()
 
-        return x_rotated
+        # Linear projections
+        Q = self.q_proj(query)  # [Query_t, Batch, Query_d]
 
-    def rotate_half(self, x):
-        x1, x2 = x[..., :self.channels // 2], x[..., self.channels // 2:]
-        return torch.cat((-x2, x1), dim=-1)
+        K = self.k_proj(key)    # [Key_t, Batch, Query_d]
+        V = self.v_proj(value)  # [Key_t, Batch, Query_d]
 
+        # Reshape
+        Q = rearrange(
+            tensor= Q,
+            pattern= 'query_t batch (num_head head_d) -> batch num_head query_t head_d',
+            num_head= self.num_heads,
+            head_d= self.head_dim
+            )   # [Batch, Head, Query_t, Head_d]
+        K = rearrange(
+            tensor= K,
+            pattern= 'key_t batch (num_head head_d) -> batch num_head key_t head_d',
+            num_head= self.num_heads,
+            head_d= self.head_dim
+            )   # [Batch, Head, Key_t, Head_d]
+        V = rearrange(
+            tensor= V,
+            pattern= 'key_t batch (num_head head_d) -> batch num_head key_t head_d',
+            num_head= self.num_heads,
+            head_d= self.head_dim
+            )   # [Batch, Head, Key_t, Head_d]
+
+        # Apply RoPE
+        Q = self.apply_rope(Q)
+        K = self.apply_rope(K)
+
+        # Scaled Dot-Product Attention using PyTorch's native function
+        Q = rearrange(
+            tensor= Q,
+            pattern= 'batch num_head query_t head_d -> (batch num_head) query_t head_d',
+            )   # [Batch * Head, Query_t, Head_d]
+        K = rearrange(
+            tensor= K,
+            pattern= 'batch num_head key_t head_d -> (batch num_head) key_t head_d',
+            )   # [Batch * Head, Key_t, Head_d]
+        V = rearrange(
+            tensor= V,
+            pattern= 'batch num_head key_t head_d -> (batch num_head) key_t head_d',
+            )   # [Batch * Head, Key_t, Head_d]
+
+        
+        # make attn_mask
+        attn_mask = torch.zeros(
+            size= (batch_size * self.num_heads, query_lengths, key_lengths),
+            device= Q.device,
+            dtype= torch.bool
+            )   # [Batch * Head, Query_t, Key_t]
+        if not key_padding_mask is None:
+            key_padding_mask = key_padding_mask[:, None, None, :].expand(
+                batch_size,
+                self.num_heads,
+                1,
+                key_lengths
+                )
+            key_padding_mask = rearrange(
+                key_padding_mask,
+                'batch_size num_head x key_t -> (batch_size num_head) x key_t'
+                )
+            attn_mask = attn_mask + key_padding_mask    # [Batch * Head, 1, Key_t]
+
+        output = torch.nn.functional.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask) # [Batch * Head, Query_t, Head_d]
+
+        # Reshape
+        output = rearrange(
+            tensor= output,
+            pattern= '(batch num_head) query_t head_d -> query_t batch (num_head head_d)',
+            batch= batch_size,
+            num_head= self.num_heads
+            )   # [Batch * Head, Query_t, Head_d] -> [Query_t, Batch, Query_d]
+        
+        output = self.o_proj(output)
+
+        return output
+
+    def apply_rope(self, x):
+        '''
+        Apply Rotary Position Embedding (RoPE) to the given tensor.
+        Args:
+            x: Tensor of shape (batch_size, num_heads, seq_len, head_dim)
+        Returns:
+            Tensor with RoPE applied.
+        '''
+        _, _, seq_len, head_dim = x.size()
+
+        # Create position index and scaling factors
+        theta = 1.0 / (10000 ** (torch.arange(0, head_dim // 2, device=x.device).float() / (head_dim // 2)))    # [Head_d / 2]
+        pos = torch.arange(0, seq_len, device= x.device).float()    # [X_t]
+        
+        # Compute sinusoidal embeddings
+        sinusoid = einsum(pos, theta, 'lengths, dim -> lengths dim')    # [X_t, Head_d / 2]
+        sin, cos = sinusoid.sin(), sinusoid.cos()
+        sin = sin[None, None, :, :] # [1, 1, X_t, Head_d / 2]
+        cos = cos[None, None, :, :] # [1, 1, X_t, Head_d / 2]
+
+        x1, x2 = x.chunk(chunks= 2, dim= 3) # [Batch, Head, X_t, Head_d / 2] * 2
+        x_rope = torch.cat([
+            x1 * cos - x2 * sin,
+            x1 * sin + x2 * cos
+            ], dim= 3)  # [Batch, Head, X_t, Head_d]
+
+        return x_rope
 
 class Positional_Encoding(torch.nn.Module):
     def __init__(
