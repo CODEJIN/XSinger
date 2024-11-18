@@ -345,7 +345,6 @@ class FFT_Block(torch.nn.Module):
             value= x_attentions,
             key_padding_mask= masks
             )   # [X_t, X_d, Batch]
-        # torch._C._nn.scaled_dot_product_attention
         
         if self.norm_type == Norm_Type.LayerNorm:
             x_attentions = self.attention_norm(x_attentions + residuals).permute(1, 2, 0) * float_masks
@@ -602,7 +601,9 @@ class MultiHeadAttentionWithRoPE(torch.nn.Module):
         query: torch.FloatTensor,
         key: torch.FloatTensor,
         value: torch.FloatTensor,
-        key_padding_mask: Optional[torch.Tensor]= None
+        key_padding_mask: Optional[torch.Tensor]= None,
+        need_weights: bool= False,
+        average_attn_weights: bool= True
         ):
         '''
         query: [Query_t, Batch, Query_d]
@@ -656,12 +657,10 @@ class MultiHeadAttentionWithRoPE(torch.nn.Module):
             pattern= 'batch num_head key_t head_d -> (batch num_head) key_t head_d',
             )   # [Batch * Head, Key_t, Head_d]
 
-        
         # make attn_mask
         attn_mask = torch.zeros(
             size= (batch_size * self.num_heads, query_lengths, key_lengths),
-            device= Q.device,
-            dtype= torch.bool
+            device= Q.device
             )   # [Batch * Head, Query_t, Key_t]
         if not key_padding_mask is None:
             key_padding_mask = key_padding_mask[:, None, None, :].expand(
@@ -674,7 +673,7 @@ class MultiHeadAttentionWithRoPE(torch.nn.Module):
                 key_padding_mask,
                 'batch_size num_head x key_t -> (batch_size num_head) x key_t'
                 )
-            attn_mask = attn_mask + key_padding_mask    # [Batch * Head, 1, Key_t]
+            attn_mask = attn_mask + key_padding_mask.float()    # [Batch * Head, 1, Key_t], flash attention use float type mask
 
         output = torch.nn.functional.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask) # [Batch * Head, Query_t, Head_d]
 
@@ -688,7 +687,27 @@ class MultiHeadAttentionWithRoPE(torch.nn.Module):
         
         output = self.o_proj(output)
 
-        return output
+        alignments = None
+        if need_weights:
+            scaling = float(self.head_dim) ** -0.5
+            attn_weights = torch.bmm(Q * scaling, K.mT)
+            if not key_padding_mask is None:
+                attn_weights = attn_weights.masked_fill(
+                    key_padding_mask,
+                    float(torch.finfo(attn_weights.dtype).min)
+                    )
+            alignments = torch.softmax(attn_weights, dim=-1)    # [Batch * Head, Query_t, Key_t]
+            alignments = rearrange(
+                alignments,
+                '(batch num_head) query_t key_t -> batch num_head query_t key_t',
+                batch= batch_size,
+                num_head = self.num_heads
+                )
+            if average_attn_weights:
+                alignments = alignments.mean(dim= 1)    # [Batch, Query_t, Key_t]
+
+        return output, alignments
+
 
     def apply_rope(self, x):
         '''

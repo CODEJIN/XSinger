@@ -3,7 +3,7 @@ import torch
 import math
 from typing import Union, List, Optional, Tuple
 
-from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Norm_Type, Positional_Encoding
+from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Norm_Type, MultiHeadAttentionWithRoPE
 from .GRL import GRL
 from .Diffusion import Diffusion
 
@@ -130,11 +130,11 @@ class Encoder(torch.nn.Module):
         self.melody_encoder = Melody_Encoder(self.hp)
         self.phoneme_to_note_encoder = Phoneme_to_Note_Encoder(self.hp)
 
-        self.positional_encoding = Positional_Encoding(
-            num_embeddings= self.hp.Durations,
-            embedding_dim= self.hp.Encoder.Size
-            )
-        self.cross_attention = torch.nn.MultiheadAttention(
+        # self.cross_attention = torch.nn.MultiheadAttention(
+        #     embed_dim= self.hp.Encoder.Size,
+        #     num_heads= self.hp.Encoder.Cross_Attention.Head
+        #     )
+        self.cross_attention = MultiHeadAttentionWithRoPE(
             embed_dim= self.hp.Encoder.Size,
             num_heads= self.hp.Encoder.Cross_Attention.Head
             )
@@ -188,13 +188,6 @@ class Encoder(torch.nn.Module):
 
         note_to_decoding_alignments = Length_Regulate(durations).mT # [Batch, Note_t, Dec_t]
         melody_encodings = (melody_encodings + pooled_lyric_encodings) @ note_to_decoding_alignments # [Batch, Enc_d, Dec_t]
-
-        lyric_encodings = lyric_encodings + self.positional_encoding(
-            position_ids= torch.arange(lyric_encodings.size(2), device= lyric_encodings.device)[None]
-            ).mT
-        melody_encodings = melody_encodings + self.positional_encoding(
-            position_ids= torch.arange(melody_encodings.size(2), device= melody_encodings.device)[None]
-            ).mT
         
         encodings, cross_attention_alignments = self.cross_attention(
             query= melody_encodings.permute(2, 0, 1),
@@ -203,7 +196,8 @@ class Encoder(torch.nn.Module):
             key_padding_mask= Mask_Generate(
                 lengths= token_lengths,
                 max_length= torch.ones_like(lyric_encodings[0, 0]).sum()
-                )
+                ),
+            need_weights= True
             )   # [Dec_t, Batch, Enc_d], [Batch, Dec_t, Token_t]
         encodings = self.cross_attention_norm(encodings)
         encodings = encodings.permute(1, 2, 0) # [Batch, Enc_d, Dec_t]
@@ -238,11 +232,6 @@ class Lyric_Encoder(torch.nn.Module):
             embedding_dim= self.hp.Encoder.Size // 2
             )
         Embedding_Initialize_(self.language_embedding)
-        
-        self.positional_encoding = Positional_Encoding(
-            num_embeddings= self.hp.Durations,
-            embedding_dim= self.hp.Encoder.Size
-            )
 
         self.blocks = torch.nn.ModuleList([
             FFT_Block(
@@ -283,10 +272,6 @@ class Lyric_Encoder(torch.nn.Module):
         languages = self.language_embedding(languages)  # [Batch, Token_t, Enc_d / 2]
 
         encodings = torch.cat([tokens, languages], dim= 2).mT * float_masks # [Batch, Enc_d, Token_t]
-    
-        encodings = encodings + self.positional_encoding(
-            position_ids= torch.arange(encodings.size(2), device= encodings.device)[None]
-            ).mT
 
         for block in self.blocks:
             encodings = block(
@@ -317,11 +302,6 @@ class Melody_Encoder(torch.nn.Module):
             embedding_dim= self.hp.Encoder.Size // 2
             )
         
-        self.positional_encoding = Positional_Encoding(
-            num_embeddings= self.hp.Durations,
-            embedding_dim= self.hp.Encoder.Size
-            )
-
         self.blocks = torch.nn.ModuleList([
             FFT_Block(
                 channels= self.hp.Encoder.Size,
@@ -356,10 +336,6 @@ class Melody_Encoder(torch.nn.Module):
         durations = self.duration_embedding(durations)   # [Batch, Note_t, Enc_d / 2]
         
         encodings = torch.cat([notes, durations], dim= 2).mT * float_masks # [Batch, Enc_d, Token_t]
-    
-        encodings = encodings + self.positional_encoding(
-            position_ids= torch.arange(encodings.size(2), device= encodings.device)[None]
-            ).mT
 
         for block in self.blocks:
             encodings = block(
@@ -376,11 +352,6 @@ class Phoneme_to_Note_Encoder(torch.nn.Module):
         ):
         super().__init__()
         self.hp = hyper_parameters
-        
-        self.positional_encoding = Positional_Encoding(
-            num_embeddings= self.hp.Durations,
-            embedding_dim= self.hp.Encoder.Size
-            )
         
         self.blocks = torch.nn.ModuleList([
             FFT_Block(
@@ -410,10 +381,6 @@ class Phoneme_to_Note_Encoder(torch.nn.Module):
             masks = Mask_Generate(lengths= lengths, max_length= torch.ones_like(encodings[0, 0]).sum())    # [Batch, Time]
             float_masks = (~masks)[:, None].float()   # float mask, [Batch, 1, X_t]
 
-        encodings = encodings + self.positional_encoding(
-            position_ids= torch.arange(encodings.size(2), device= encodings.device)[None]
-            ).mT
-
         for block in self.blocks:
             encodings = block(
                 x= encodings,
@@ -429,11 +396,6 @@ class Prior_Encoder(torch.nn.Module):
         ):
         super().__init__()
         self.hp = hyper_parameters
-        
-        self.positional_encoding = Positional_Encoding(
-            num_embeddings= self.hp.Durations,
-            embedding_dim= self.hp.Encoder.Size
-            )
         
         self.blocks = torch.nn.ModuleList([
             FFT_Block(
@@ -460,10 +422,6 @@ class Prior_Encoder(torch.nn.Module):
         encodings: [Batch, Enc_d, Latent_Code_t]
         lengths: [Batch], latent_code_lengths
         '''
-        encodings = encodings + self.positional_encoding(
-            position_ids= torch.arange(encodings.size(2), device= encodings.device)[None]
-            ).mT
-
         for block in self.blocks:
             encodings = block(
                 x= encodings,

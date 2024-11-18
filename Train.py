@@ -15,7 +15,7 @@ from accelerate import DistributedDataParallelKwargs
 from Logger import Logger
 from typing import List
 
-from Modules.Modules import RectifiedFlowSVS, Mask_Generate
+from Modules.Modules import RectifiedFlowSVS, Mask_Generate, Length_Regulate
 from Datasets import Dataset, Inference_Dataset, Collater, Inference_Collater
 from Modules.Guided_Attention import Guided_Attention_Loss
 from hificodec.vqvae import VQVAE
@@ -287,8 +287,8 @@ class Trainer:
                 ) * latent_code_float_masks[:, None, :]).sum() / latent_code_float_masks.sum() / prediction_flows.size(1)
             loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
                 alignments= cross_attention_alignments,
-                query_lengths= latent_code_lengths,
-                key_lengths= token_lengths
+                token_on_note_lengths= token_on_note_lengths,
+                note_durations = durations
                 )
             
             self.optimizer_dict['RectifiedFlowSVS'].zero_grad()
@@ -410,8 +410,8 @@ class Trainer:
             ) * latent_code_float_masks[:, None, :]).sum() / latent_code_float_masks.sum() / prediction_flows.size(1)
         loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
             alignments= cross_attention_alignments,
-            query_lengths= latent_code_lengths,
-            key_lengths= token_lengths
+            token_on_note_lengths= token_on_note_lengths,
+            note_durations = durations
             )
 
         for tag, loss in loss_dict.items():
@@ -480,6 +480,7 @@ class Trainer:
                     )
 
             token_length = token_lengths[index].item()
+            note_length = note_lengths[index].item()
             latent_code_length = latent_code_lengths[index].item()
             audio_length = latent_code_length * self.hp.Sound.Hop_Size
 
@@ -492,12 +493,14 @@ class Trainer:
             target_audio = target_audio.cpu().numpy()
             prediction_audio = prediction_audio.cpu().numpy()
 
+            score_alignment = Length_Regulate(durations[index, None, :note_length])[0].T.cpu().numpy()
             cross_attention_alignment = cross_attention_alignments[0, :latent_code_length, :token_length].T.cpu().numpy()
 
             image_dict = {
                 'Mel/Target': (target_mel, None, 'auto', None, None, None),
                 'Mel/Prediction': (prediction_mel, None, 'auto', None, None, None),
-                'Cross_Alignment': (cross_attention_alignment, None, 'auto', None, None, None),
+                'Alignment/Score_Alignment': (score_alignment, None, 'auto', None, None, None),
+                'Alignment/Cross_Alignment': (cross_attention_alignment, None, 'auto', None, None, None),
                 }
             audio_dict = {
                 'Audio/Target': (target_audio, self.hp.Sound.Sample_Rate),
@@ -520,6 +523,8 @@ class Trainer:
                     data= {
                         'Evaluation.Mel.Target': wandb.Image(target_mel),
                         'Evaluation.Mel.Prediction': wandb.Image(prediction_mel),
+                        'Evaluation.Alignment.Score_Alignment': wandb.Image(score_alignment),
+                        'Evaluation.Alignment.Cross_Alignment': wandb.Image(cross_attention_alignment),
                         'Evaluation.Audio.Target': wandb.Audio(
                             target_audio,
                             sample_rate= self.hp.Sound.Sample_Rate,

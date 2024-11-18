@@ -3,7 +3,6 @@
 wandb
 results
 Pattern_Generator_Secret.py
-temp.py
 error_log.txt
 LJ_Load.pickle
 
@@ -15,4 +14,4 @@ note_error/
 note_fix/
 .vscode/settings.json
 Train_.py
-temp2.py
+temp*.py

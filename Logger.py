@@ -18,7 +18,7 @@ class Logger(SummaryWriter):
         for tag, (data, size, aspect, x_limit, y_limit, c_limit) in image_dict.items():
             fig= plt.figure(figsize= size or (10, 5), dpi= 100)
             if data.ndim == 1:
-                plt.imshow([[0]], aspect=aspect, origin='lower', cmap= matplotlib.colors.ListedColormap(['white']))
+                plt.imshow([[0]], aspect=aspect, origin='lower', cmap= matplotlib.colors.ListedColormap(['white']), interpolation= 'none')
                 plt.plot(data)
                 plt.margins(x= 0)
                 if not x_limit is None:
@@ -26,7 +26,7 @@ class Logger(SummaryWriter):
                 if not y_limit is None:
                     plt.ylim(*y_limit)
             elif data.ndim == 2:
-                plt.imshow(data, aspect=aspect, origin='lower')                
+                plt.imshow(data, aspect=aspect, origin='lower', interpolation= 'none')
                 if not x_limit is None:
                     plt.xlim(*x_limit)
                 if not y_limit is None:
@@ -34,7 +34,7 @@ class Logger(SummaryWriter):
                 if not c_limit is None:
                     plt.clim(*c_limit)
             elif data.ndim == 3 and data.shape[2] in [3, 4]:    #RGB or RGBA
-                plt.imshow(data, aspect=aspect, origin='lower')
+                plt.imshow(data, aspect=aspect, origin='lower', interpolation= 'none')
                 if not x_limit is None:
                     plt.xlim(*x_limit)
                 if not y_limit is None:

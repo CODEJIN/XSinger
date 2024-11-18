@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Union
 from tqdm import tqdm
 from torchdiffeq import odeint
 
-from .Layer import Conv_Init, Lambda, FFT_Block, Positional_Encoding
+from .Layer import Conv_Init, Lambda, FFT_Block
 
 class Diffusion(torch.nn.Module):
     def __init__(
@@ -169,11 +169,6 @@ class Network(torch.nn.Module):
             Lambda(lambda x: x[:, :, None])
             )
 
-        self.positional_encoding = Positional_Encoding(
-            num_embeddings= self.hp.Durations,
-            embedding_dim= self.hp.Diffusion.Size
-            )
-
         self.blocks = torch.nn.ModuleList([
             FFT_Block(
                 channels= self.hp.Diffusion.Size,
@@ -219,9 +214,7 @@ class Network(torch.nn.Module):
         singers = self.singer_ffn(singers)
         diffusion_steps = self.step_ffn(diffusion_steps) # [Batch, Res_d, 1]
 
-        x = x + encodings + singers + diffusion_steps + self.positional_encoding(
-            position_ids= torch.arange(x.size(2), device= encodings.device)[None]
-            ).mT
+        x = x + encodings + singers + diffusion_steps
 
         for block in self.blocks:
             x = block(x, lengths)
