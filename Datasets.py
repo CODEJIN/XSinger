@@ -76,15 +76,14 @@ def Language_Stack(languages: List[List[int]], max_length: Optional[int]= None):
         )
     return languages
 
-
-
-def Latent_Stack(latents: List[np.ndarray], max_length: Optional[int]= None):
-    max_latent_length = max_length or max([latent.shape[1] for latent in latents])
-    latents = np.stack(
-        [np.pad(latent, [[0, 0], [0, max_latent_length - latent.shape[1]]], constant_values= 0) for latent in latents],
+def Mel_Stack(mels: List[np.ndarray], max_length: Optional[int]= None):
+    max_mel_length = max_length or max([mel.shape[1] for mel in mels])
+    mels = np.stack(
+        [np.pad(mel, [[0, 0], [0, max_mel_length - mel.shape[1]]], constant_values= mel.min()) for mel in mels],
         axis= 0
         )
-    return latents
+    return mels
+
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(
@@ -138,10 +137,10 @@ class Dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         token_combination, token_on_note_length_combination, \
         note_combination, duration_combination, \
-        singer_combination, language_combination, latent_code_combination = [], [], [], [], [], [], []
+        singer_combination, language_combination, mel_combination = [], [], [], [], [], [], []
 
         for sample_pattern in [self.patterns[idx]] + list(sample(self.patterns, self.num_combination - 1)):
-            token, token_on_note_length, note, duration, singer, language, latent_code = self.Pattern_LRU_Cache(
+            token, token_on_note_length, note, duration, singer, language, mel = self.Pattern_LRU_Cache(
                 os.path.join(self.pattern_path, sample_pattern).replace('\\', '/')
                 )
             
@@ -158,8 +157,8 @@ class Dataset(torch.utils.data.Dataset):
                 if not note_offset_end is None:
                     break
             
-            # latent code offset
-            latent_code_offset_start, latent_code_offset_end = sum(duration[:note_offset_start]), sum(duration[:note_offset_end])
+            # mel code offset
+            mel_offset_start, mel_offset_end = sum(duration[:note_offset_start]), sum(duration[:note_offset_end])
 
             token = [x for token_on_note in token[note_offset_start:note_offset_end] for x in token_on_note]
             token_on_note_length = token_on_note_length[note_offset_start:note_offset_end]
@@ -167,7 +166,7 @@ class Dataset(torch.utils.data.Dataset):
             duration = duration[note_offset_start:note_offset_end]
             singer = [singer] * len(token)
             language = [language] * len(token)
-            latent_code = latent_code[:, latent_code_offset_start:latent_code_offset_end]
+            mel = mel[:, mel_offset_start:mel_offset_end]
 
             token_combination.extend(token)
             token_on_note_length_combination.extend(token_on_note_length)
@@ -175,14 +174,14 @@ class Dataset(torch.utils.data.Dataset):
             duration_combination.extend(duration)
             singer_combination.extend(singer)
             language_combination.extend(language)
-            latent_code_combination.append(latent_code)
+            mel_combination.append(mel)
 
-        latent_code_combination = np.concatenate(latent_code_combination, axis= 1)
+        mel_combination = np.concatenate(mel_combination, axis= 1)
         
         return \
             token_combination, token_on_note_length_combination, \
             note_combination, duration_combination, \
-            singer_combination, language_combination, latent_code_combination
+            singer_combination, language_combination, mel_combination
     
     def Pattern_LRU_Cache(self, path: str):
         pattern_dict = pickle.load(open(path, 'rb'))
@@ -194,9 +193,9 @@ class Dataset(torch.utils.data.Dataset):
             ])
         singer = self.singer_dict[pattern_dict['Singer']]
         language = self.language_dict[pattern_dict['Language']]
-        latent_code = pattern_dict['Latent_Code']
+        mel = pattern_dict['Mel']
         
-        return token, token_on_note_length, note, duration, singer, language, latent_code
+        return token, token_on_note_length, note, duration, singer, language, mel
 
     def __len__(self):
         return len(self.patterns)
@@ -271,11 +270,11 @@ class Collater:
         self.token_dict = token_dict
 
     def __call__(self, batch):
-        tokens, token_on_note_lengths, notes, durations, singers, languages, latent_codes = zip(*batch)
+        tokens, token_on_note_lengths, notes, durations, singers, languages, mels = zip(*batch)
         
         token_lengths = np.array([len(token) for token in tokens])
         note_lengths = np.array([len(note) for note in notes])
-        latent_code_lengths = np.array([latent_code.shape[1] for latent_code in latent_codes])
+        mel_lengths = np.array([mel.shape[1] for mel in mels])
 
         tokens = Token_Stack(tokens, self.token_dict)
         token_on_note_lengths = Token_on_Note_Length_Stack(token_on_note_lengths)
@@ -283,7 +282,7 @@ class Collater:
         durations = Duration_Stack(durations)
         singers = Singer_Stack(singers)
         languages = Language_Stack(languages)
-        latent_codes = Latent_Stack(latent_codes)
+        mels = Mel_Stack(mels)
 
         tokens = torch.IntTensor(tokens)   # [Batch, Token_t]
         token_lengths = torch.IntTensor(token_lengths)  # [Batch]
@@ -296,14 +295,14 @@ class Collater:
         singers = torch.IntTensor(singers)  # [Batch, Token_t]
         languages = torch.IntTensor(languages)  # [Batch, Token_t]
 
-        latent_codes = torch.LongTensor(latent_codes)  # [Batch, Latent_Code_n, Latent_t]
-        latent_code_lengths = torch.IntTensor(latent_code_lengths)    # [Batch]
+        mels = torch.FloatTensor(mels)  # [Batch, N_Mel, Mel_t]
+        mel_lengths = torch.IntTensor(mel_lengths)    # [Batch]
         
         return \
             tokens, token_lengths, token_on_note_lengths, \
             notes, durations, note_lengths, \
             singers, languages, \
-            latent_codes, latent_code_lengths
+            mels, mel_lengths
 
 class Inference_Collater:
     def __init__(self,
@@ -316,7 +315,7 @@ class Inference_Collater:
 
         token_lengths = np.array([len(token) for token in tokens])
         note_lengths = np.array([len(note) for note in notes])
-        latent_code_lengths = np.array([sum(duration) for duration in durations])
+        mel_lengths = np.array([sum(duration) for duration in durations])
 
         tokens = Token_Stack(tokens, self.token_dict)
         token_on_note_lengths = Token_on_Note_Length_Stack(token_on_note_lengths)
@@ -336,10 +335,10 @@ class Inference_Collater:
         singers = torch.IntTensor(singers)  # [Batch, Token_t]
         languages = torch.IntTensor(languages)  # [Batch, Token_t]
 
-        latent_code_lengths = torch.IntTensor(latent_code_lengths)    # [Batch]
+        mel_lengths = torch.IntTensor(mel_lengths)    # [Batch]
 
         return \
             tokens, token_lengths, token_on_note_lengths, \
             notes, durations, note_lengths, \
             singers, languages, \
-            latent_code_lengths, lyrics
+            mel_lengths, lyrics

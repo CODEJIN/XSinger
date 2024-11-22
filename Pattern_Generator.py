@@ -13,6 +13,7 @@ from itertools import cycle
 from collections import deque
 from typing import Dict, Union
 
+from meldataset import mel_spectrogram
 from Phonemize import Phonemize, Language, _Korean_Syllablize, _Chinese_Syllablize, _Japanese_Syllable_to_IPA
 
 from hificodec.vqvae import VQVAE
@@ -1202,6 +1203,209 @@ def Kiritan(
             verbose= verbose
             )
 
+def Oputon(
+    hyper_paramters: Namespace,
+    dataset_path: str,
+    verbose: bool= False
+    ):    
+    def remove_initial_consonant(syllable):
+        # 히라가나 모음 매핑
+        vowel_map = {
+            'あ': 'あ', 'い': 'い', 'う': 'う', 'え': 'え', 'お': 'お',
+            'か': 'あ', 'き': 'い', 'く': 'う', 'け': 'え', 'こ': 'お',
+            'さ': 'あ', 'し': 'い', 'す': 'う', 'せ': 'え', 'そ': 'お',
+            'た': 'あ', 'ち': 'い', 'つ': 'う', 'て': 'え', 'と': 'お',
+            'な': 'あ', 'に': 'い', 'ぬ': 'う', 'ね': 'え', 'の': 'お',
+            'は': 'あ', 'ひ': 'い', 'ふ': 'う', 'へ': 'え', 'ほ': 'お',
+            'ま': 'あ', 'み': 'い', 'む': 'う', 'め': 'え', 'も': 'お',
+            'や': 'あ', 'ゆ': 'う', 'よ': 'お',
+            'ら': 'あ', 'り': 'い', 'る': 'う', 'れ': 'え', 'ろ': 'お',
+            'わ': 'あ', 'を': 'お', 'ん': 'ん',
+            'が': 'あ', 'ぎ': 'い', 'ぐ': 'う', 'げ': 'え', 'ご': 'お',
+            'ざ': 'あ', 'じ': 'い', 'ず': 'う', 'ぜ': 'え', 'ぞ': 'お',
+            'だ': 'あ', 'ぢ': 'い', 'づ': 'う', 'で': 'え', 'ど': 'お',
+            'ば': 'あ', 'び': 'い', 'ぶ': 'う', 'べ': 'え', 'ぼ': 'お',
+            'ぱ': 'あ', 'ぴ': 'い', 'ぷ': 'う', 'ぺ': 'え', 'ぽ': 'お',
+
+            'ぁ': 'あ', 'ぃ': 'い', 'ぅ': 'う', 'ぇ': 'え', 'ぉ': 'お',
+            'ゕ': 'あ', 'ゖ': 'え',
+            'ゃ': 'あ', 'ゅ': 'う', 'ょ': 'お',
+            'ゎ': 'あ',
+            }
+        
+        if len(syllable) == 2 and syllable[1] in ['ん', 'っ']:
+            return remove_initial_consonant(syllable[0]) + syllable[1]
+
+        return vowel_map[syllable[-1]]
+
+    def dakuten_fix(syllable):
+        dakuten_map = {
+            'う': 'ゔ',
+            'か': 'が', 'き': 'ぎ', 'く': 'ぐ', 'け': 'げ', 'こ': 'ご',
+            'さ': 'ざ', 'し': 'じ', 'す': 'ず', 'せ': 'ぜ', 'そ': 'ぞ',
+            'た': 'だ', 'ち': 'ぢ', 'つ': 'づ', 'て': 'で', 'と': 'ど',
+            'は': 'ば', 'ひ': 'び', 'ふ': 'ぶ', 'へ': 'べ', 'ほ': 'ぼ',        
+            }
+        
+        return dakuten_map[syllable]
+
+    def get_duration_seconds(quater_length, current_tempo):
+        return quater_length * (60 / current_tempo.number)
+    
+    paths = []
+    for root, _, files in os.walk(dataset_path):
+        for file in files:
+            if os.path.splitext(file)[1] != '.wav':
+                continue
+            wav_path = os.path.join(root, file).replace('\\', '/')
+            score_path = wav_path.replace('.wav', '.musicxml')
+            paths.append((wav_path, score_path))
+
+    paths = sorted(paths, key= lambda x: x[0])
+
+    for index, (wav_path, score_path) in tqdm(
+        enumerate(paths),
+        total= len(paths),
+        desc= 'Oputon'
+        ):
+        music = []
+        cumulative_time = 0.0
+        
+        music_label = os.path.splitext(os.path.basename(wav_path))[0]        
+        pattern_path = os.path.join(
+            hyper_paramters.Train.Train_Pattern.Path if not index == (len(paths) - 1) else hyper_paramters.Train.Eval_Pattern.Path,
+            'Oputon',
+            'Oputon',
+            f'{music_label}.pickle'
+            ).replace('\\', '/')
+        if os.path.exists(pattern_path) or os.path.exists(os.path.join(f'./note_error/Oputon/Oputon/{music_label}.png')):
+            continue
+        
+        score = music21.converter.parse(score_path)
+        current_tempo = music21.tempo.MetronomeMark(number= 100)
+
+        for part in score.parts:
+            previous_split = 1
+            for element in part.flatten():
+                if isinstance(element, music21.tempo.MetronomeMark):
+                    current_tempo = element
+                elif isinstance(element, music21.note.Note):
+                    note = librosa.note_to_midi(element.nameWithOctave.replace('-', '♭'))
+                    if not element.lyric is None and '゛' in element.lyric:
+                        if element.lyric[0] == '゛':
+                            music[-1][1][2] = music[-1][1][:-1] + dakuten_fix(music[-1][1][-1])
+                            element.lyric = element.lyric[:-1]
+                        else:
+                            hakuten_index = element.lyric.index('゛')
+                            element.lyric = element.lyric[:max(0, hakuten_index - 2)] + dakuten_fix(element.lyric[hakuten_index - 1]) + element.lyric[hakuten_index + 1:]
+
+                    if element.lyric is None:                        
+                        duration_seconds = get_duration_seconds(element.quarterLength, current_tempo)
+                        cumulative_time += duration_seconds
+                        if music[-1][2] == note:
+                            for previous_split_index in range(1, previous_split + 1):
+                                music[-previous_split_index] = (
+                                    music[-previous_split_index][0] + duration_seconds / previous_split,
+                                    music[-previous_split_index][1],
+                                    music[-previous_split_index][2]
+                                    )
+                        else:   # music[-1][0] != note, 28의 'つう', 47 'ろ' 체크
+                            if previous_split == 1:
+                                music.append((duration_seconds, remove_initial_consonant(music[-1][1]), note))
+                                if music[-2][1][-1] in ['ん', 'っ']:    # -2 is correct because of new score.
+                                    music[-2] = (music[-2][0], music[-2][1][:-1], music[-2][2])
+                            elif previous_split == 2:
+                                if music[-1][1][-1] in ['ん', 'っ']:
+                                    print(index+1, music[-2], music[-1])                                    
+                                    assert False
+                                music[-2] = (music[-2][0] + music[-1][0], music[-2][1], music[-2][2])
+                                music[-1] = (duration_seconds, music[-1][1], note)
+                            else:
+                                for x in music:
+                                    print(x)
+                                print(index, note, previous_split)
+                                raise NotImplementedError(f'Check index {index + 1}')
+                    elif len(element.lyric) == 1:
+                        duration_seconds = get_duration_seconds(element.quarterLength, current_tempo)
+                        cumulative_time += duration_seconds
+                        lyric = element.lyric
+                        if element.lyric == 'ー':
+                            lyric = remove_initial_consonant(music[-1][1])
+                        elif element.lyric in ['ん', 'っ']:
+                            previous_syllable = [
+                                previous_syllable
+                                for _, previous_syllable, _ in music
+                                if previous_syllable != '<X>'][-1]  # sometime staccato makes problem.
+                            lyric = remove_initial_consonant(previous_syllable) + element.lyric                            
+                        music.append((duration_seconds, lyric, note))
+                        previous_split = 1
+                    else:   # len(element.lyric) > 1
+                        lyrics = []
+                        for syllable in element.lyric:
+                            if not syllable in ['ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'ゕ', 'ゖ', 'っ', 'ゃ', 'ゅ', 'ょ', 'ゎ', 'ん'] or len(lyrics) == 0:
+                                lyrics.append([syllable])
+                            else:
+                                lyrics[-1].append(syllable)
+                        lyrics = [''.join(x) for x in lyrics]
+                        notes = [note] * len(lyrics)
+                        duration_seconds = [get_duration_seconds(element.quarterLength / len(lyrics), current_tempo)] * len(lyrics)
+                        cumulative_time += sum(duration_seconds)
+                        for note, duration, lyric in zip(notes, duration_seconds, lyrics):
+                            music.append((duration, lyric, note))                        
+                        previous_split = len(lyrics)
+                elif isinstance(element, music21.note.Rest):
+                    duration_seconds = get_duration_seconds(element.quarterLength, current_tempo)
+                    cumulative_time += duration_seconds
+                    if len(music) > 0 and music[-1][2] == 0:
+                        music[-1] = (music[-1][0] + duration_seconds, music[-1][1], music[-1][2])
+                    else:
+                        music.append((duration_seconds, '<X>', 0))
+        
+        music = Japanese_G2P_Lyric(music)
+        
+        audio, _ = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)
+        while True:
+            if music[0][1] == '<X>' and music[1][1] == '<X>':
+                audio = audio[int(music[0][0] * hyper_paramters.Sound.Sample_Rate):]
+                music = music[1:]
+            elif music[0][1] == '<X>' and music[0][0] > 1.0:  # music[1][1] != '<X>'
+                audio = audio[int((music[0][0] - 1.0) * hyper_paramters.Sound.Sample_Rate):]                
+                music[0] = (1.0, music[0][1], music[0][2])
+            else:
+                break
+        while True:
+            if music[-1][1] == '<X>':
+                music = music[:-1]
+            else:
+                break
+
+        music = Convert_Feature_Based_Duration(
+            music= music,
+            sample_rate= hyper_paramters.Sound.Sample_Rate,
+            hop_size= hyper_paramters.Sound.Hop_Size
+            )
+    
+        audio = audio[:audio.shape[0] - (audio.shape[0] % hyper_paramters.Sound.Hop_Size)]
+        music_length = sum([x[0] for x in music]) * hyper_paramters.Sound.Hop_Size
+        audio_length = audio.shape[0]
+        if music_length < audio_length:
+            audio = audio[:music_length]
+        audio = librosa.util.normalize(audio) * 0.95
+
+        Pattern_File_Generate(
+            music= music,
+            audio= audio,
+            music_label= music_label,
+            singer= 'Oputon',
+            genre= 'Children',
+            language= 'Japanese',
+            dataset= 'Oputon',
+            is_eval_music= index == (len(paths) - 1),
+            hyper_paramters= hyper_paramters,
+            note_error_criterion= 1.0,
+            verbose= verbose
+            )
+
 def AIHub_Metabuild(
     hyper_paramters: Namespace,
     dataset_path: str,
@@ -1565,7 +1769,17 @@ def Pattern_File_Generate(
     ):
     audio_tensor = torch.from_numpy(audio).to(device).float()
     with torch.inference_mode():
-        latent_code = hificodec.encode(audio_tensor[None])[0].T.cpu().numpy() # [4, Audio_t / 320]
+        mel = mel_spectrogram(
+            y= audio_tensor[None],
+            n_fft= hyper_paramters.Sound.Hop_Size * 4,
+            num_mels= hyper_paramters.Sound.N_Mel,
+            sampling_rate= hyper_paramters.Sound.Sample_Rate,
+            hop_size= hyper_paramters.Sound.Hop_Size,
+            win_size= hyper_paramters.Sound.Hop_Size * 4,
+            fmin= 0,
+            fmax= None,
+            center= False
+            )[0].cpu().numpy() # [Batch, N_Mel, Audio_t / Hop_Size]
 
     f0 = rapt(
         x= audio * 32768,
@@ -1574,16 +1788,16 @@ def Pattern_File_Generate(
         min= hyper_paramters.Sound.F0_Min,
         max= hyper_paramters.Sound.F0_Max,
         otype= 1,
-        )[:latent_code.shape[1]]
+        )[:mel.shape[1]]
     
     music_length = sum([x[0] for x in music])
-    if latent_code.shape[1] > music_length:
+    if mel.shape[1] > music_length:
         # print('Case1')
-        latent_code = latent_code[:, math.floor((latent_code.shape[1] - music_length) / 2.0):-math.ceil((latent_code.shape[1] - music_length) / 2.0)]
+        mel = mel[:, math.floor((mel.shape[1] - music_length) / 2.0):-math.ceil((mel.shape[1] - music_length) / 2.0)]
         f0 = f0[math.floor((f0.shape[0] - music_length) / 2.0):-math.ceil((f0.shape[0] - music_length) / 2.0)]
-    elif music_length > latent_code.shape[1]:
+    elif music_length > mel.shape[1]:
         # print('Case2')
-        fix_length = music_length - latent_code.shape[1]
+        fix_length = music_length - mel.shape[1]
         fix_index = None
         for fix_index in reversed(range(len(music))):
             if music[fix_index][0] <= fix_length:
@@ -1677,7 +1891,7 @@ def Pattern_File_Generate(
                 return False
 
     pattern = {
-        'Latent_Code': latent_code.astype(np.int16),
+        'Mel': mel.astype(np.float16),
         'F0': f0.astype(np.float16),
         'Music': music,
         'Singer': singer,
@@ -1735,7 +1949,7 @@ def Metadata_Generate(
     pattern_path = hyper_parameters.Train.Eval_Pattern.Path if eval else hyper_parameters.Train.Train_Pattern.Path
     metadata_file = hyper_parameters.Train.Eval_Pattern.Metadata_File if eval else hyper_parameters.Train.Train_Pattern.Metadata_File
 
-    latent_dict = {}
+    mel_dict = {}
     f0_dict = {}
     tokens = []
     singers = []
@@ -1747,7 +1961,7 @@ def Metadata_Generate(
         'Hop_Size': hyper_parameters.Sound.Hop_Size,
         'Sample_Rate': hyper_parameters.Sound.Sample_Rate,
         'File_List': [],
-        'Latent_Length_Dict': {},
+        'Mel_Length_Dict': {},
         'F0_Length_Dict': {},
         'Music_Length_Dict': {},
         'Singer_Dict': {},
@@ -1769,12 +1983,12 @@ def Metadata_Generate(
             file = os.path.join(root, file).replace('\\', '/').replace(pattern_path, '').lstrip('/')
             if not all([
                 key in pattern_dict.keys()
-                for key in ('Latent_Code', 'F0', 'Music', 'Singer', 'Genre', 'Dataset')
+                for key in ('Mel', 'F0', 'Music', 'Singer', 'Genre', 'Dataset')
                 ]):
                 print(f'Skipped pickle file \'{file}\' because of insufficient dict_keys: {pattern_dict.keys()}')
                 continue
 
-            new_metadata_dict['Latent_Length_Dict'][file] = pattern_dict['Latent_Code'].shape[1]
+            new_metadata_dict['Mel_Length_Dict'][file] = pattern_dict['Mel'].shape[1]
             new_metadata_dict['F0_Length_Dict'][file] = pattern_dict['F0'].shape[0]
             new_metadata_dict['Music_Length_Dict'][file] = len(pattern_dict['Music'])
             new_metadata_dict['Singer_Dict'][file] = pattern_dict['Singer']
@@ -1783,14 +1997,13 @@ def Metadata_Generate(
                 new_metadata_dict['File_List_by_Singer_Dict'][pattern_dict['Singer']] = []
             new_metadata_dict['File_List_by_Singer_Dict'][pattern_dict['Singer']].append(file)
 
-            if not pattern_dict['Singer'] in latent_dict.keys():
-                latent_dict[pattern_dict['Singer']] = {'Min': math.inf, 'Max': -math.inf}
+            if not pattern_dict['Singer'] in mel_dict.keys():
+                mel_dict[pattern_dict['Singer']] = {'Min': math.inf, 'Max': -math.inf}
             if not pattern_dict['Singer'] in f0_dict.keys():
                 f0_dict[pattern_dict['Singer']] = []
             
-            latent = hificodec.quantizer.embed(torch.from_numpy(pattern_dict['Latent_Code']).T[None].long().to(device))[0].cpu()
-            latent_dict[pattern_dict['Singer']]['Min'] = min(latent_dict[pattern_dict['Singer']]['Min'], latent.min().item())
-            latent_dict[pattern_dict['Singer']]['Max'] = max(latent_dict[pattern_dict['Singer']]['Max'], latent.max().item())
+            mel_dict[pattern_dict['Singer']]['Min'] = min(mel_dict[pattern_dict['Singer']]['Min'], pattern_dict['Mel'].min().item())
+            mel_dict[pattern_dict['Singer']]['Max'] = max(mel_dict[pattern_dict['Singer']]['Max'], pattern_dict['Mel'].max().item())
             
             f0_dict[pattern_dict['Singer']].append(pattern_dict['F0'])
             tokens.extend([phoneme for _, lyric, _, _ in pattern_dict['Music'] for phoneme in lyric])
@@ -1811,8 +2024,8 @@ def Metadata_Generate(
 
     if not eval:
         yaml.dump(
-            latent_dict,
-            open(hp.Latent_Info_Path, 'w')
+            mel_dict,
+            open(hp.Mel_Info_Path, 'w')
             )
         
         f0_info_dict = {}
@@ -1831,6 +2044,9 @@ def Metadata_Generate(
             open(hp.F0_Info_Path, 'w')
             )
 
+
+        print(set(tokens))
+        assert False
         Token_Dict_Generate(hp, sorted(list(set(tokens))))
 
         singer_index_dict = {
@@ -1872,6 +2088,7 @@ if __name__ == '__main__':
     argparser.add_argument('-m4', '--m4singer_path', required= False)
     argparser.add_argument('-nus48e', '--nus48e_path', required= False)
     argparser.add_argument('-kiritan', '--kiritan_path', required= False)
+    argparser.add_argument('-oputon', '--oputon_path', required= False)
     argparser.add_argument('-hp', '--hyper_paramters', required= True)
     argparser.add_argument('-verbose', '--verbose', action= 'store_true')
     args = argparser.parse_args()
@@ -1922,6 +2139,14 @@ if __name__ == '__main__':
             verbose= args.verbose
             )
 
+    if args.oputon_path:
+        Oputon(
+            hyper_paramters= hp,
+            dataset_path= args.oputon_path,
+            verbose= args.verbose
+            )
+
+
     if args.aihub_metabuild_path:
         AIHub_Metabuild(
             hyper_paramters= hp,
@@ -1939,5 +2164,10 @@ if __name__ == '__main__':
 #   -m4 /mnt/f/Rawdata_Music/m4singer \
 #   -nus48e /mnt/f/Rawdata_Music/NUS48E \
 #   -kiritan /mnt/f/Rawdata_Music/Kiritan \
-#   -amb /mnt/f/Rawdata_Music/CSD_Fix \
+#   -amb /mnt/e/177.다음색 가이드보컬 데이터 \
+#   -verbose
+
+
+# python -m Pattern_Generator -hp Hyper_Parameters.yaml \
+#   -oputon /mnt/f/Rawdata_Music/OFUTON_P_UTAGOE_DB
 #   -verbose

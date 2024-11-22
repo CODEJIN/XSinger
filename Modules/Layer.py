@@ -266,7 +266,7 @@ class FFT_Block(torch.nn.Module):
         super().__init__()
         self.norm_type = norm_type
 
-        self.attention = torch.nn.MultiheadAttention(
+        self.attention = MultiHeadAttentionWithRoPE(
             embed_dim= channels,
             num_heads= num_head
             )

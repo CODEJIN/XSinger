@@ -24,24 +24,24 @@ class Diffusion(torch.nn.Module):
         self,
         encodings: torch.FloatTensor,
         singers: torch.FloatTensor,
-        latents: torch.FloatTensor,
+        mels: torch.FloatTensor,
         lengths: torch.IntTensor
         ):
         '''
         encodings: [Batch, Enc_d, Dec_t]
-        latents: [Batch, Latent_d, Latent_t]
+        mels: [Batch, Mel_d, Mel_t]
         '''
         diffusion_times = torch.rand(encodings.size(0), device= encodings.device)   # [Batch]
         cosmap_schedule_times = self.cosmap_calc(diffusion_times)[:, None, None]
 
-        noises = torch.randn_like(latents)  # [Batch, Latent_d, Latent_t]
+        noises = torch.randn_like(mels)  # [Batch, Mel_d, Mel_t]
 
-        noised_latents = cosmap_schedule_times * latents + (1.0 - cosmap_schedule_times) * noises
-        flows = latents - noises
+        noised_mels = cosmap_schedule_times * mels + (1.0 - cosmap_schedule_times) * noises
+        flows = mels - noises
 
         # predict flow
         network_output = self.network(
-            noised_latents= noised_latents,
+            noised_mels= noised_mels,
             encodings= encodings,
             singers= singers,
             lengths= lengths,
@@ -50,14 +50,14 @@ class Diffusion(torch.nn.Module):
         
         if self.hp.Diffusion.Network_Prediction == 'Flow':
             prediction_flows = network_output
-            prediction_noises = noised_latents - prediction_flows * cosmap_schedule_times.clamp(1e-7)   # is it working?
+            prediction_noises = noised_mels - prediction_flows * cosmap_schedule_times.clamp(1e-7)   # is it working?
         elif self.hp.Diffusion.Network_Prediction == 'Noise':
             prediction_noises = network_output
-            prediction_flows = (noised_latents - prediction_noises) / cosmap_schedule_times.clamp(1e-7)
+            prediction_flows = (noised_mels - prediction_noises) / cosmap_schedule_times.clamp(1e-7)
         else:
             NotImplementedError(f'Unsupported diffusion network prediction type: {self.hp.Diffusion.Network_Prediction}')
 
-        # prediction_latents = noised_latents + prediction_flows * (1.0 - cosmap_schedule_times)    # not using
+        # prediction_mels = noised_mels + prediction_flows * (1.0 - cosmap_schedule_times)    # not using
 
         return flows, prediction_flows, noises, prediction_noises
     
@@ -69,18 +69,18 @@ class Diffusion(torch.nn.Module):
         steps: int
         ):
         noises = torch.randn(
-            encodings.size(0), self.hp.Audio_Codec_Size, encodings.size(2),
+            encodings.size(0), self.hp.Sound.N_Mel, encodings.size(2),
             device= encodings.device,
             dtype= encodings.dtype
-            )  # [Batch, Latent_d, Latent_t]
+            )  # [Batch, Mel_d, Mel_t]
         
-        def ode_func(diffusion_times: torch.Tensor, noised_latents: torch.Tensor):
-            diffusion_times = diffusion_times[None].expand(noised_latents.size(0))
+        def ode_func(diffusion_times: torch.Tensor, noised_mels: torch.Tensor):
+            diffusion_times = diffusion_times[None].expand(noised_mels.size(0))
             cosmap_schedule_times = self.cosmap_calc(diffusion_times)[:, None, None]
 
             # predict flow
             network_output = self.network(
-                noised_latents= noised_latents,
+                noised_mels= noised_mels,
                 encodings= encodings,
                 singers= singers,
                 lengths= lengths,
@@ -91,13 +91,13 @@ class Diffusion(torch.nn.Module):
                 prediction_flows = network_output                
             elif self.hp.Diffusion.Network_Prediction == 'Noise':
                 prediction_noises = network_output
-                prediction_flows = (noised_latents - prediction_noises) / cosmap_schedule_times.clamp(1e-7)
+                prediction_flows = (noised_mels - prediction_noises) / cosmap_schedule_times.clamp(1e-7)
             else:
                 NotImplementedError(f'Unsupported diffusion network prediction type: {self.hp.Diffusion.Network_Prediction}')
 
             return prediction_flows
         
-        latents = odeint(
+        mels = odeint(
             func= ode_func,
             y0= noises,
             t= torch.linspace(0.0, 1.0, steps, device= encodings.device),
@@ -106,7 +106,7 @@ class Diffusion(torch.nn.Module):
             method= 'midpoint'
             )[-1]
 
-        return latents
+        return mels
 
 class Network(torch.nn.Module):
     def __init__(
@@ -118,7 +118,7 @@ class Network(torch.nn.Module):
 
         self.prenet = torch.nn.Sequential(
             Conv_Init(torch.nn.Conv1d(
-                in_channels= self.hp.Audio_Codec_Size,
+                in_channels= self.hp.Sound.N_Mel,
                 out_channels= self.hp.Diffusion.Size,
                 kernel_size= 1,
                 ), w_init_gain= 'gelu'),
@@ -191,25 +191,25 @@ class Network(torch.nn.Module):
             torch.nn.GELU(approximate= 'tanh'),
             Conv_Init(torch.nn.Conv1d(
                 in_channels= self.hp.Diffusion.Size,
-                out_channels= self.hp.Audio_Codec_Size,
+                out_channels= self.hp.Sound.N_Mel,
                 kernel_size= 1), w_init_gain= 'zero'),
             )
 
     def forward(
         self,
-        noised_latents: torch.FloatTensor,
+        noised_mels: torch.FloatTensor,
         encodings: torch.FloatTensor,
         singers: torch.FloatTensor,
         lengths: torch.FloatTensor,
         diffusion_steps: torch.FloatTensor
         ):
         '''
-        noised_latents: [Batch, Latent_d, Dec_t]
+        noised_mels: [Batch, Mel_d, Dec_t]
         encodings: [Batch, Enc_d, Dec_t]
         singers: [Batch, Enc_d, Dec_t]
         diffusion_steps: [Batch]
         '''
-        x = self.prenet(noised_latents)
+        x = self.prenet(noised_mels)
         encodings = self.encoding_ffn(encodings)
         singers = self.singer_ffn(singers)
         diffusion_steps = self.step_ffn(diffusion_steps) # [Batch, Res_d, 1]

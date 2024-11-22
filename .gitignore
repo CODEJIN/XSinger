@@ -15,3 +15,4 @@ note_fix/
 .vscode/settings.json
 Train_.py
 temp*.py
+BigVGAN_24K_100band_256x.pts

@@ -4,30 +4,28 @@ import math
 from typing import Union, List, Optional, Tuple
 
 from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Norm_Type, MultiHeadAttentionWithRoPE
-from .GRL import GRL
 from .Diffusion import Diffusion
-
-from hificodec.vqvae import VQVAE
 
 class RectifiedFlowSVS(torch.nn.Module):
     def __init__(
         self,
         hyper_parameters: Namespace,
-        hificodec: VQVAE,
-        latent_min: float,
-        latent_max: float
+        mel_min: float,
+        mel_max: float
         ):
         super().__init__()
         self.hp = hyper_parameters
-        self.latent_min = latent_min
-        self.latent_max = latent_max
+        self.mel_min = mel_min
+        self.mel_max = mel_max
 
         self.encoder = Encoder(self.hp)
+        self.linear_projection = Conv_Init(torch.nn.Conv1d(
+            in_channels= self.hp.Encoder.Size,
+            out_channels= self.hp.Sound.N_Mel,
+            kernel_size= 1
+            ), w_init_gain= 'linear')
 
         self.diffusion = Diffusion(self.hp)
-
-        self.hificodec = hificodec
-        self.hificodec.eval()
 
     def forward(
         self,
@@ -39,12 +37,10 @@ class RectifiedFlowSVS(torch.nn.Module):
         durations: torch.IntTensor,
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
-        latent_codes: torch.IntTensor,
-        latent_code_lengths: torch.IntTensor,
+        mels: torch.FloatTensor,
+        mel_lengths: torch.IntTensor,
         ):
-        with torch.no_grad():
-            latents = self.hificodec.quantizer.embed(latent_codes.mT).detach()
-            latents = (latents - self.latent_min) / (self.latent_max - self.latent_min) * 2.0 - 1.0
+        mels = (mels - self.mel_min) / (self.mel_max - self.mel_min) * 2.0 - 1.0
 
         encodings, singers, cross_attention_alignments = self.encoder(
             tokens= tokens,
@@ -55,17 +51,19 @@ class RectifiedFlowSVS(torch.nn.Module):
             durations= durations,
             note_lengths= note_lengths,
             singers= singers,
-            latent_code_lengths= latent_code_lengths
+            mel_lengths= mel_lengths
             )    # [Batch, Enc_d, Dec_t], [Batch, Enc_d, Dec_t], [Batch, Dec_t, Token_t]
+        
+        prediction_mels = self.linear_projection(encodings)
 
         flows, prediction_flows, _, _ = self.diffusion(
             encodings= encodings,
             singers= singers,
-            latents= latents,
-            lengths= latent_code_lengths,
+            mels= mels,
+            lengths= mel_lengths,
             )
 
-        return flows, prediction_flows, cross_attention_alignments
+        return flows, prediction_flows, prediction_mels, cross_attention_alignments
     
     def Inference(
         self,
@@ -77,7 +75,7 @@ class RectifiedFlowSVS(torch.nn.Module):
         durations: torch.IntTensor,
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
-        latent_code_lengths: torch.IntTensor,
+        mel_lengths: torch.IntTensor,
         diffusion_steps: int= 16
         ):
         encodings, singers, cross_attention_alignments = self.encoder(
@@ -89,28 +87,18 @@ class RectifiedFlowSVS(torch.nn.Module):
             durations= durations,
             note_lengths= note_lengths,
             singers= singers,
-            latent_code_lengths= latent_code_lengths
+            mel_lengths= mel_lengths
             )    # [Batch, Enc_d, Enc_t], [Batch, Enc_d, Dec_t]
 
-        latents = self.diffusion.Inference(
+        mels = self.diffusion.Inference(
             encodings= encodings,
             singers= singers,
-            lengths= latent_code_lengths,
+            lengths= mel_lengths,
             steps= diffusion_steps,
             )
-        latents = (latents + 1.0) / 2.0 * (self.latent_max - self.latent_min) + self.latent_min
+        mels = (mels + 1.0) / 2.0 * (self.mel_max - self.mel_min) + self.mel_min
 
-        # Performing VQ to correct the incomplete predictions of diffusion.
-        *_, latent_codes = self.hificodec.quantizer(latents)
-        latent_codes = [code.reshape(tokens.size(0), -1) for code in latent_codes]
-        latent_codes = torch.stack(latent_codes, 2)
-        audios = self.hificodec(latent_codes)[:, 0, :]
-
-        return audios, cross_attention_alignments
-
-    def train(self, mode: bool= True):
-        super().train(mode= mode)
-        self.hificodec.eval()
+        return mels, cross_attention_alignments
 
 class Encoder(torch.nn.Module):
     def __init__(
@@ -130,10 +118,6 @@ class Encoder(torch.nn.Module):
         self.melody_encoder = Melody_Encoder(self.hp)
         self.phoneme_to_note_encoder = Phoneme_to_Note_Encoder(self.hp)
 
-        # self.cross_attention = torch.nn.MultiheadAttention(
-        #     embed_dim= self.hp.Encoder.Size,
-        #     num_heads= self.hp.Encoder.Cross_Attention.Head
-        #     )
         self.cross_attention = MultiHeadAttentionWithRoPE(
             embed_dim= self.hp.Encoder.Size,
             num_heads= self.hp.Encoder.Cross_Attention.Head
@@ -152,7 +136,7 @@ class Encoder(torch.nn.Module):
         durations: torch.IntTensor,
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
-        latent_code_lengths: torch.IntTensor
+        mel_lengths: torch.IntTensor
         ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
         '''
         tokens: [Batch, Enc_t]
@@ -188,9 +172,10 @@ class Encoder(torch.nn.Module):
 
         note_to_decoding_alignments = Length_Regulate(durations).mT # [Batch, Note_t, Dec_t]
         melody_encodings = (melody_encodings + pooled_lyric_encodings) @ note_to_decoding_alignments # [Batch, Enc_d, Dec_t]
-        
+        melody_encodings = melody_encodings.permute(2, 0, 1)
+
         encodings, cross_attention_alignments = self.cross_attention(
-            query= melody_encodings.permute(2, 0, 1),
+            query= melody_encodings,
             key= lyric_encodings.permute(2, 0, 1),
             value= lyric_encodings.permute(2, 0, 1),
             key_padding_mask= Mask_Generate(
@@ -199,7 +184,7 @@ class Encoder(torch.nn.Module):
                 ),
             need_weights= True
             )   # [Dec_t, Batch, Enc_d], [Batch, Dec_t, Token_t]
-        encodings = self.cross_attention_norm(encodings)
+        encodings = self.cross_attention_norm(melody_encodings + encodings)
         encodings = encodings.permute(1, 2, 0) # [Batch, Enc_d, Dec_t]
         
         singers = singers @ token_to_note_alignments @ note_to_decoding_alignments  # [Batch, Enc_d, Dec_t]
@@ -207,7 +192,7 @@ class Encoder(torch.nn.Module):
         encodings: torch.FloatTensor = self.prior_encoder(
             encodings= encodings,
             singers= singers,
-            lengths= latent_code_lengths
+            lengths= mel_lengths
             )   # [Batch, Enc_d, Dec_t]
   
         return encodings, singers, cross_attention_alignments   # singer: using in diffusion.
@@ -419,8 +404,8 @@ class Prior_Encoder(torch.nn.Module):
         lengths: torch.IntTensor
         ) -> torch.FloatTensor:
         '''
-        encodings: [Batch, Enc_d, Latent_Code_t]
-        lengths: [Batch], latent_code_lengths
+        encodings: [Batch, Enc_d, Mel_t]
+        lengths: [Batch], mel_lengths
         '''
         for block in self.blocks:
             encodings = block(

@@ -67,8 +67,8 @@ def spectral_de_normalize_torch(magnitudes):
     output = dynamic_range_decompression_torch(magnitudes)
     return output
 
-mel_basis_caches = {}
-hann_window_caches = {}
+mel_basis = {}
+hann_window = {}
 
 def mel_spectrogram(
     y: torch.Tensor,
@@ -78,58 +78,66 @@ def mel_spectrogram(
     hop_size: int,
     win_size: int,
     fmin: int,
-    fmax: int= None,
-    center: bool= False,
-    use_normalize= True
-    ) -> torch.Tensor:
+    fmax: int = None,
+    center: bool = False,
+) -> torch.Tensor:
+    """
+    Calculate the mel spectrogram of an input signal.
+    This function uses slaney norm for the librosa mel filterbank (using librosa.filters.mel) and uses Hann window for STFT (using torch.stft).
+
+    Args:
+        y (torch.Tensor): Input signal.
+        n_fft (int): FFT size.
+        num_mels (int): Number of mel bins.
+        sampling_rate (int): Sampling rate of the input signal.
+        hop_size (int): Hop size for STFT.
+        win_size (int): Window size for STFT.
+        fmin (int): Minimum frequency for mel filterbank.
+        fmax (int): Maximum frequency for mel filterbank. If None, defaults to half the sampling rate (fmax = sr / 2.0) inside librosa_mel_fn
+        center (bool): Whether to pad the input to center the frames. Default is False.
+
+    Returns:
+        torch.Tensor: Mel spectrogram.
+    """
     if torch.min(y) < -1.0:
-        logging.warning('min value is {}'.format(torch.min(y)))
-    if torch.max(y) > 1.:
-        logging.warning('max value is {}'.format(torch.max(y)))
+        print(f"[WARNING] Min value of input waveform signal is {torch.min(y)}")
+    if torch.max(y) > 1.0:
+        print(f"[WARNING] Max value of input waveform signal is {torch.max(y)}")
 
     device = y.device
-    mel_key = f'{n_fft}_{num_mels}_{sampling_rate}_{fmin}_{fmax}_{device}'
-    hann_window_key = f'{win_size}_{device}'
-    
-    if mel_key not in mel_basis_caches:
-        mel = librosa_mel_fn(
-            sr= sampling_rate,
-            n_fft= n_fft,
-            n_mels= num_mels,
-            fmin= fmin,
-            fmax= fmax
-            )
-        mel_basis_caches[mel_key] = torch.from_numpy(mel).float().to(device)
-    if hann_window_key not in hann_window_caches:
-        hann_window_caches[hann_window_key] = torch.hann_window(win_size).to(device)
+    key = f"{n_fft}_{num_mels}_{sampling_rate}_{hop_size}_{win_size}_{fmin}_{fmax}_{device}"
 
-    mel_basis = mel_basis_caches[mel_key]
-    hann_window = hann_window_caches[hann_window_key]
+    if key not in mel_basis_cache:
+        mel = librosa_mel_fn(
+            sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax
+        )
+        mel_basis_cache[key] = torch.from_numpy(mel).float().to(device)
+        hann_window_cache[key] = torch.hann_window(win_size).to(device)
+
+    mel_basis = mel_basis_cache[key]
+    hann_window = hann_window_cache[key]
 
     padding = (n_fft - hop_size) // 2
     y = torch.nn.functional.pad(
-        y[:, None, :],
-        (padding, padding),
-        mode='reflect'
-        )[:, 0, :]
-    
+        y.unsqueeze(1), (padding, padding), mode="reflect"
+    ).squeeze(1)
+
     spec = torch.stft(
         y,
         n_fft,
-        hop_length= hop_size,
-        win_length= win_size,
-        window= hann_window,
-        center= center,
-        pad_mode= 'reflect',
-        normalized= False,
-        onesided= True,
-        return_complex= True
-        )
+        hop_length=hop_size,
+        win_length=win_size,
+        window=hann_window,
+        center=center,
+        pad_mode="reflect",
+        normalized=False,
+        onesided=True,
+        return_complex=True,
+    )
     spec = torch.sqrt(torch.view_as_real(spec).pow(2).sum(-1) + 1e-9)
 
     mel_spec = torch.matmul(mel_basis, spec)
-    if use_normalize:
-        mel_spec = spectral_normalize_torch(mel_spec)
+    mel_spec = spectral_normalize_torch(mel_spec)
 
     return mel_spec
 
@@ -139,16 +147,13 @@ def cepstral_liftering(y, n_fft, feature_size, hop_size, win_size, cutoff= 3, ce
     if torch.max(y) > 1.:
         logging.warning('max value is {}'.format(torch.max(y)))
 
-    device = y.device
-    hann_window_key = f'{win_size}_{device}'
-    if hann_window_key not in hann_window_caches:
-        hann_window_caches[hann_window_key] = torch.hann_window(win_size).to(device)
-    hann_window = hann_window_caches[hann_window_key]
+    global hann_window
+    hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
 
     y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
     y = y.squeeze(1)
 
-    spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window,
+    spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[str(y.device)],
                       center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex= True)
     spec = torch.fft.irfft(torch.log(spec+1e-6), axis= 1)
     
@@ -170,16 +175,13 @@ def spectrogram(y, n_fft, hop_size, win_size, center=False, use_normalize= True)
     if torch.max(y) > 1.:
         logging.warning('max value is {}'.format(torch.max(y)))
 
-    device = y.device
-    hann_window_key = f'{win_size}_{device}'
-    if hann_window_key not in hann_window_caches:
-        hann_window_caches[hann_window_key] = torch.hann_window(win_size).to(device)
-    hann_window = hann_window_key
+    global hann_window
+    hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
 
     y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
     y = y.squeeze(1)
 
-    spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window,
+    spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[str(y.device)],
                       center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=False)
 
     spec = torch.sqrt(spec.pow(2).sum(-1)+(1e-9))
@@ -191,22 +193,13 @@ def spectrogram(y, n_fft, hop_size, win_size, center=False, use_normalize= True)
 def spectrogram_to_mel(spec, n_fft, num_mels, sampling_rate, win_size, fmin, fmax, use_denorm= False):
     spec = spectral_de_normalize_torch(spec) if use_denorm else spec
     
-    device = spec.device
-    mel_key = f'{n_fft}_{num_mels}_{sampling_rate}_{fmin}_{fmax}_{device}'
-    
-    if mel_key not in mel_basis_caches:
-        mel = librosa_mel_fn(
-            sr= sampling_rate,
-            n_fft= n_fft,
-            n_mels= num_mels,
-            fmin= fmin,
-            fmax= fmax
-            )
-        mel_basis_caches[mel_key] = torch.from_numpy(mel).float().to(device)
+    global mel_basis, hann_window
+    if fmax not in mel_basis:
+        mel = librosa_mel_fn(sr= sampling_rate, n_fft= n_fft, n_mels= num_mels, fmin= fmin, fmax= fmax)
+        mel_basis[str(fmax)+'_'+str(spec.device)] = torch.from_numpy(mel).float().to(spec.device)
+        hann_window[str(spec.device)] = torch.hann_window(win_size).to(spec.device)
 
-    mel_basis = mel_basis_caches[mel_key]
-
-    spec = torch.matmul(mel_basis, spec)
+    spec = torch.matmul(mel_basis[str(fmax)+'_'+str(spec.device)], spec)
     spec = spectral_normalize_torch(spec)
 
     return spec
@@ -217,18 +210,13 @@ def spec_energy(y, n_fft, hop_size, win_size, center=False):
     if torch.max(y) > 1.:
         logging.warning('max value is {}'.format(torch.max(y)))
 
-    device = y.device
-    hann_window_key = f'{win_size}_{device}'
-    
-    if hann_window_key not in hann_window_caches:
-        hann_window_caches[hann_window_key] = torch.hann_window(win_size).to(device)
-
-    hann_window = hann_window_caches[hann_window_key]
+    global hann_window
+    hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
 
     y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
     y = y.squeeze(1)
 
-    spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window,
+    spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[str(y.device)],
                       center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=False)
     spec = torch.sqrt(spec.pow(2).sum(-1)+(1e-9))
     energy = torch.norm(spec, dim= 1)
@@ -269,18 +257,13 @@ def vtlp(y: torch.Tensor, n_fft: int, sampling_rate: int, hop_size: int, win_siz
     if torch.max(y) > 1.:
         logging.warning('max value is {}'.format(torch.max(y)))
 
-    device = y.device
-    hann_window_key = f'{win_size}_{device}'
-    
-    if hann_window_key not in hann_window_caches:
-        hann_window_caches[hann_window_key] = torch.hann_window(win_size).to(device)
+    global hann_window
+    hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
 
-    hann_window = hann_window_caches[hann_window_key]
-    
     y_padded = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
     y_padded = y_padded.squeeze(1)
 
-    spec = torch.stft(y_padded, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window,
+    spec = torch.stft(y_padded, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[str(y_padded.device)],
                       center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex= True)
 
     frequency_warp = get_frequency_warp(n_fft= spec.size(1), sampling_rate= sampling_rate, alpha= alpha)
