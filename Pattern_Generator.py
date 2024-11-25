@@ -1203,7 +1203,7 @@ def Kiritan(
             verbose= verbose
             )
 
-def Oputon(
+def Ofuton(
     hyper_paramters: Namespace,
     dataset_path: str,
     verbose: bool= False
@@ -1266,7 +1266,7 @@ def Oputon(
     for index, (wav_path, score_path) in tqdm(
         enumerate(paths),
         total= len(paths),
-        desc= 'Oputon'
+        desc= 'Ofuton'
         ):
         music = []
         cumulative_time = 0.0
@@ -1274,11 +1274,11 @@ def Oputon(
         music_label = os.path.splitext(os.path.basename(wav_path))[0]        
         pattern_path = os.path.join(
             hyper_paramters.Train.Train_Pattern.Path if not index == (len(paths) - 1) else hyper_paramters.Train.Eval_Pattern.Path,
-            'Oputon',
-            'Oputon',
+            'Ofuton',
+            'Ofuton',
             f'{music_label}.pickle'
             ).replace('\\', '/')
-        if os.path.exists(pattern_path) or os.path.exists(os.path.join(f'./note_error/Oputon/Oputon/{music_label}.png')):
+        if os.path.exists(pattern_path) or os.path.exists(os.path.join(f'./note_error/Ofuton/Ofuton/{music_label}.png')):
             continue
         
         score = music21.converter.parse(score_path)
@@ -1396,10 +1396,10 @@ def Oputon(
             music= music,
             audio= audio,
             music_label= music_label,
-            singer= 'Oputon',
+            singer= 'Ofuton',
             genre= 'Children',
             language= 'Japanese',
-            dataset= 'Oputon',
+            dataset= 'Ofuton',
             is_eval_music= index == (len(paths) - 1),
             hyper_paramters= hyper_paramters,
             note_error_criterion= 1.0,
@@ -2088,7 +2088,7 @@ if __name__ == '__main__':
     argparser.add_argument('-m4', '--m4singer_path', required= False)
     argparser.add_argument('-nus48e', '--nus48e_path', required= False)
     argparser.add_argument('-kiritan', '--kiritan_path', required= False)
-    argparser.add_argument('-oputon', '--oputon_path', required= False)
+    argparser.add_argument('-ofuton', '--ofuton_path', required= False)
     argparser.add_argument('-hp', '--hyper_paramters', required= True)
     argparser.add_argument('-verbose', '--verbose', action= 'store_true')
     args = argparser.parse_args()
@@ -2139,10 +2139,10 @@ if __name__ == '__main__':
             verbose= args.verbose
             )
 
-    if args.oputon_path:
-        Oputon(
+    if args.ofuton_path:
+        Ofuton(
             hyper_paramters= hp,
-            dataset_path= args.oputon_path,
+            dataset_path= args.ofuton_path,
             verbose= args.verbose
             )
 
@@ -2165,9 +2165,4 @@ if __name__ == '__main__':
 #   -nus48e /mnt/f/Rawdata_Music/NUS48E \
 #   -kiritan /mnt/f/Rawdata_Music/Kiritan \
 #   -amb /mnt/e/177.다음색 가이드보컬 데이터 \
-#   -verbose
-
-
-# python -m Pattern_Generator -hp Hyper_Parameters.yaml \
-#   -oputon /mnt/f/Rawdata_Music/OFUTON_P_UTAGOE_DB
 #   -verbose

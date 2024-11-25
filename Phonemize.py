@@ -312,14 +312,14 @@ def _Japanese_Syllable_to_IPA(
 
         'ぁ'  : [[   ], 'a', []], 'ぃ': [[    ], 'i', []],  'ぅ'  : [[    ], 'ɯ', []],  'ぇ': [[   ], 'e', []], 'ぉ'  : [[    ], 'o', []],
 
-        # Special case in Oputon
+        # Special case in Ofuton
         'てゃ': [['tʲ'], 'a', []],                          'てゅ': [['tʲ'], 'ɯ', []],                          'てょ': [['tʲ'], 'o', []],
         'でゃ': [['dʲ'], 'a', []],                          'でゅ': [['dʲ'], 'ɯ', []],                          'でょ': [['dʲ'], 'o', []],
         }
     
-    syllable = syllable.replace('ヴ', 'ゔ').replace('シ', 'し').replace('んん', 'ん') # Oputon uses some katakana.
+    syllable = syllable.replace('ヴ', 'ゔ').replace('シ', 'し').replace('んん', 'ん') # Ofuton uses some katakana.
     if not next_syllable is None:
-        next_syllable = next_syllable.replace('ヴ', 'ゔ').replace('シ', 'し').replace('んん', 'ん') # Oputon uses some katakana.
+        next_syllable = next_syllable.replace('ヴ', 'ゔ').replace('シ', 'し').replace('んん', 'ん') # Ofuton uses some katakana.
 
     if syllable in ipa_dict.keys():
         return ipa_dict[syllable]
@@ -353,7 +353,7 @@ def _Japanese_Syllable_to_IPA(
     if syllable == 'ん':    # single 'ん'
         if next_syllable is None:
             return [[], '', ['ɴ']]
-        elif next_syllable == 'っ':  # 'んっ' is impossible, but some songs in Oputon have 'んっ'. 'っ' is ignored.
+        elif next_syllable == 'っ':  # 'んっ' is impossible, but some songs in Ofuton have 'んっ'. 'っ' is ignored.
             return [[], '', ['ɴ']]
         elif next_syllable[0] in [
             'あ', 'い', 'う', 'え', 'お',
