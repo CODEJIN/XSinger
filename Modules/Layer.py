@@ -1,6 +1,9 @@
 import torch
 import math
+from enum import Enum
 from typing import Optional
+
+from einops import einsum, rearrange
 
 class Lambda(torch.nn.Module):
     def __init__(self, lambd):
@@ -37,67 +40,110 @@ class RMSNorm(torch.nn.Module):
 
         return output * self.scale.view(*shape)
 
-class Scale(torch.nn.Module):
-    def __init__(
-        self,
-        condition_features: int,
-        *args,
-        **kwargs
-        ):
-        super().__init__(*args, **kwargs)
-        self.condition = torch.nn.Sequential(
-            Lambda(lambda x: x.unsqueeze(2)),
-            Conv_Init(torch.nn.Conv1d(
-                in_channels= condition_features,
-                out_channels= self.num_features * 2,
-                kernel_size= 1,
-                ), w_init_gain= 'relu'),
-            torch.nn.SiLU()
-            )
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        conditions: torch.Tensor
-        ):
-        x = super().forward(x)
-        betas, gammas = self.condition(conditions).chunk(chunks= 2, dim= 1)
-        x = (gammas + 1) * x + betas
-
-        return x
-    
-class Scaling(torch.nn.Module):
+class Conditional_LayerNorm(torch.nn.LayerNorm):
     def __init__(
         self,
         channels: int,
         condition_channels: int,
-        use_shift: bool= True
+        eps: float= 1e-5,
+        bias: bool= True,
+        device= None,
+        dtype= None
         ):
-        super().__init__()
-        self.use_shift = use_shift
-
-        self.silu = torch.nn.SiLU()
-        self.conv = Conv_Init(torch.nn.Conv1d(
-            in_channels= condition_channels,
-            out_channels= channels * (1 + use_shift),
-            kernel_size= 1,
-            ), w_init_gain= 'zero')
+        super().__init__(
+            normalized_shape= channels,
+            eps= eps,
+            elementwise_affine= False,
+            bias= bias,
+            device= device,
+            dtype= dtype,
+            )
+        
+        self.affine = Conv_Init(torch.nn.Linear(
+            in_features= condition_channels,
+            out_features= channels * 2,
+            bias= True
+            ), w_init_gain= 'linear')
+        self.affine.bias.data[:channels] = 1
+        self.affine.bias.data[channels:] = 0        
 
     def forward(
         self,
-        x: torch.Tensor,
-        conditions: torch.Tensor
+        x: torch.FloatTensor,
+        conditions: torch.FloatTensor
+        ) -> torch.FloatTensor:
+        '''
+        x: [Batch, Time, X_d],
+        conditions: [Batch, Time, Cond_d]
+        '''
+        x = super().forward(x)  # [Batch, Time, X_d]
+
+        gammas, betas = self.affine(conditions).chunk(chunks= 2, dim= 2)    # [Batch, Time, X_d] * 2
+        x = gammas * x + betas
+
+        return x
+
+class Mixed_LayerNorm(torch.nn.LayerNorm):
+    def __init__(
+        self,
+        channels: int,
+        condition_channels: int,
+        beta_distribution_concentration: float,
+        eps: float= 1e-5,
+        bias: bool= True,
+        device= None,
+        dtype= None
         ):
-        conditions = self.silu(conditions)
-        conditions = self.conv(conditions)
+        super().__init__(
+            normalized_shape= channels,
+            eps= eps,
+            elementwise_affine= False,
+            bias= bias,
+            device= device,
+            dtype= dtype,
+            )
+        
+        self.beta_distribution = torch.distributions.Beta(
+            beta_distribution_concentration,
+            beta_distribution_concentration
+            )
 
-        if self.use_shift:
-            scales, shifts = conditions.chunk(chunks= 2, dim= 1)
-        else:
-            scales = conditions
-            shifts = torch.zeros_like(scales)
+        self.affine = Conv_Init(torch.nn.Linear(
+            in_features= condition_channels,
+            out_features= channels * 2,
+            bias= True
+            ), w_init_gain= 'linear')
+        self.affine.bias.data[:channels] = 1
+        self.affine.bias.data[channels:] = 0        
 
-        return x * (1 + scales) + shifts
+    def forward(
+        self,
+        x: torch.FloatTensor,
+        conditions: torch.FloatTensor
+        ) -> torch.FloatTensor:
+        '''
+        x: [Batch, Time, X_d],
+        conditions: [Batch, Time, Cond_d]
+        '''
+        x = super().forward(x)  # [Batch, Time, X_d]
+
+        betas, gammas = self.affine(conditions).chunk(chunks= 2, dim= 2)    # [Batch, Time, X_d] * 2
+        
+        if not self.training:
+            return gammas * x + betas
+
+        suffile_indices = torch.randperm(conditions.size(1))
+        shuffled_betas = betas[:, suffile_indices, :]
+        shuffled_gammas = gammas[:, suffile_indices, :]
+
+        beta_samples = self.beta_distribution.sample((x.size(0), 1, 1)).to(x.device) # [Batch, 1, 1]
+        
+        mixed_betas = beta_samples * betas + (1 - beta_samples) * shuffled_betas
+        mixed_gammas = beta_samples * gammas + (1 - beta_samples) * shuffled_gammas
+
+        x = mixed_gammas * x + mixed_betas
+
+        return x
 
 class LightweightConv1d(torch.nn.Module):
     '''
@@ -198,6 +244,11 @@ class FairseqDropout(torch.nn.Module):
         else:
             return x
 
+class Norm_Type(Enum):
+    LayerNorm= 0
+    Conditional_LayerNorm= 1
+    Mixed_LayerNorm= 2
+
 class FFT_Block(torch.nn.Module):
     def __init__(
         self,
@@ -207,41 +258,78 @@ class FFT_Block(torch.nn.Module):
         residual_conv_kernel_size: int,        
         ffn_kernel_size: int,
         residual_conv_dropout_rate: float= 0.1,
-        ffn_dropout_rate: float= 0.1
+        ffn_dropout_rate: float= 0.1,
+        norm_type: Norm_Type= Norm_Type.LayerNorm,
+        condition_channels: Optional[float]= None,
+        beta_distribution_concentration: Optional[float]= None
         ) -> None:
         super().__init__()
+        self.norm_type = norm_type
 
-        self.attention = torch.nn.MultiheadAttention(
+        self.attention = MultiHeadAttentionWithRoPE(
             embed_dim= channels,
             num_heads= num_head
-            )        
-        self.attention_norm = torch.nn.LayerNorm(channels)
+            )
+
+        if norm_type == Norm_Type.LayerNorm:
+            self.attention_norm = torch.nn.LayerNorm(channels)
+        elif norm_type == Norm_Type.Conditional_LayerNorm:
+            self.attention_norm = Conditional_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels
+                )
+        elif norm_type == Norm_Type.Mixed_LayerNorm:
+            self.attention_norm = Mixed_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels,
+                beta_distribution_concentration= beta_distribution_concentration
+                )
         
         self.residual_conv_blocks = torch.nn.ModuleList([
             FFN(
                 channels= channels,
                 kernel_size= residual_conv_kernel_size,
-                droput_rate= residual_conv_dropout_rate
+                droput_rate= residual_conv_dropout_rate,
+                norm_type= norm_type,
+                condition_channels= condition_channels,
+                beta_distribution_concentration= beta_distribution_concentration
                 )
             for _ in range(residual_conv_stack)
             ])
         
-        self.norm = torch.nn.LayerNorm(channels)
+        if norm_type == Norm_Type.LayerNorm:
+            self.norm = torch.nn.LayerNorm(channels)
+        elif norm_type == Norm_Type.Conditional_LayerNorm:
+            self.norm = Conditional_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels
+                )
+        elif norm_type == Norm_Type.Mixed_LayerNorm:
+            self.norm = Mixed_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels,
+                beta_distribution_concentration= beta_distribution_concentration
+                )
+
         self.ffn = FFN(
             channels= channels,
             kernel_size= ffn_kernel_size,
-            droput_rate= ffn_dropout_rate
+            droput_rate= ffn_dropout_rate,
+            norm_type= norm_type,
+            condition_channels= condition_channels,
+            beta_distribution_concentration= beta_distribution_concentration
             )
 
     def forward(
         self,
-        x: torch.Tensor,
-        lengths: Optional[torch.Tensor]= None
-        ) -> torch.Tensor:
+        x: torch.FloatTensor,
+        conditions: Optional[torch.FloatTensor]= None,
+        lengths: Optional[torch.FloatTensor]= None,
+        ) -> torch.FloatTensor:
         '''
-        x: [B, X_c, X_t]
+        x: [B, X_d, X_t]
+        conditions: [B, C_d, X_t]
         lengths: [B]
-
         '''
         masks = None
         float_masks = 1.0
@@ -250,24 +338,45 @@ class FFT_Block(torch.nn.Module):
             float_masks = (~masks).unsqueeze(1).float()   # float mask, [Batch, 1, X_t]
 
         # attention block
-        residuals = x_attentions = x.permute(2,0,1).contiguous()
+        residuals = x_attentions = x.permute(2, 0, 1).contiguous()
         x_attentions, _ = self.attention(
             query= x_attentions,
             key= x_attentions,
             value= x_attentions,
             key_padding_mask= masks
-            )
-        x_attentions = self.attention_norm(x_attentions + residuals).permute(1, 2, 0) * float_masks
+            )   # [X_t, X_d, Batch]
         
+        if self.norm_type == Norm_Type.LayerNorm:
+            x_attentions = self.attention_norm(x_attentions + residuals).permute(1, 2, 0) * float_masks
+        elif self.norm_type in [Norm_Type.Conditional_LayerNorm, Norm_Type.Mixed_LayerNorm]:
+            x_attentions = self.attention_norm(
+                x= (x_attentions + residuals).permute(1, 0, 2),
+                conditions= conditions.mT
+                ).mT * float_masks
+
         # conv block
         x_convs = x
         for block in self.residual_conv_blocks:
-            x_convs = block(x_convs, float_masks)
-        
-        residuals = x = self.norm((x_attentions + x_convs).mT).mT * float_masks
+            x_convs = block(
+                x= x_convs,
+                conditions= conditions,
+                float_masks= float_masks
+                )
+
+        if self.norm_type == Norm_Type.LayerNorm:
+            x = self.norm((x_attentions + x_convs).mT).mT * float_masks
+        elif self.norm_type in [Norm_Type.Conditional_LayerNorm, Norm_Type.Mixed_LayerNorm]:
+            x = self.norm(
+                x= (x_attentions + x_convs).mT,
+                conditions= conditions.mT
+                ).mT * float_masks
         
         # feed forward
-        x = self.ffn(x, float_masks)
+        x = self.ffn(
+            x= x,
+            conditions= conditions,
+            float_masks= float_masks
+            )
         
         return x    # [B, X_c, X_t]
 
@@ -276,9 +385,14 @@ class FFN(torch.nn.Module):
         self,
         channels: int,
         kernel_size: int,
-        droput_rate: float= 0.0
+        droput_rate: float= 0.0,
+        norm_type: Norm_Type= Norm_Type.LayerNorm,
+        condition_channels: Optional[int]= None,
+        beta_distribution_concentration: Optional[float]= None,
         ) -> None:
         super().__init__()
+        self.norm_type = norm_type
+
         self.conv_0 = Conv_Init(torch.nn.Conv1d(
             in_channels= channels,
             out_channels= channels,
@@ -294,23 +408,43 @@ class FFN(torch.nn.Module):
             padding= (kernel_size - 1) // 2,
             bias= False
             )
-        self.norm = torch.nn.LayerNorm(channels)
+
+        if norm_type == Norm_Type.LayerNorm:
+            self.norm = torch.nn.LayerNorm(channels)
+        elif norm_type == Norm_Type.Conditional_LayerNorm:
+            self.norm = Conditional_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels
+                )
+        elif norm_type == Norm_Type.Mixed_LayerNorm:
+            self.norm = Mixed_LayerNorm(
+                channels= channels,
+                condition_channels= condition_channels,
+                beta_distribution_concentration= beta_distribution_concentration
+                )
         
         self.dropout = torch.nn.Dropout(p= droput_rate)
 
     def forward(
         self,
         x: torch.Tensor,
-        float_masks: torch.FloatTensor
+        conditions: Optional[torch.FloatTensor]= None,
+        float_masks: Optional[torch.FloatTensor]= 1.0,
         ):
         residuals = x
-
         x = self.conv_0(x * float_masks)
         x = self.gelu(x)
         x = self.dropout(x)
         x = self.conv_1(x * float_masks)
         x = self.dropout(x)
-        x = self.norm((x + residuals).mT).mT * float_masks
+
+        if self.norm_type == Norm_Type.LayerNorm:
+            x = self.norm((x + residuals).mT).mT * float_masks
+        elif self.norm_type in [Norm_Type.Conditional_LayerNorm, Norm_Type.Mixed_LayerNorm]:
+            x = self.norm(
+                x= (x + residuals).mT,
+                conditions= conditions.mT
+                ).mT * float_masks
 
         return x
 
@@ -361,36 +495,258 @@ class Prompt_Block(FFT_Block):
         
         return x    # [B, X_c, X_t]
 
-
-
-class RotaryPositionalEncoding(torch.nn.Module):
-    def __init__(self, channels: int):
+class LinearAttention(torch.nn.Module):
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        ) -> None:
         super().__init__()
-        self.channels = channels
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2).float() / channels))
-        self.register_buffer('inv_freq', inv_freq)
+        assert embed_dim % num_heads == 0, 'embed_dim must be divisible by num_heads.'
 
-    def forward(self, x):
-        seq_length = x.size(0)
-        t = torch.arange(
-            seq_length,
-            dtype= self.inv_freq.dtype,
-            device=x.device
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.scaling = self.head_dim ** -0.5
+
+        self.query = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
             )
-        freqs = torch.einsum('i,j->ij', t, self.inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1)  # (seq_length, dim)
+        self.key = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+        self.value = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
         
-        cos_emb = emb.cos().unsqueeze(1)  # (seq_length, 1, dim)
-        sin_emb = emb.sin().unsqueeze(1)  # (seq_length, 1, dim)
+        self.projection = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
 
-        x_rotated = x * cos_emb + self.rotate_half(x) * sin_emb
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor]= None
+        ) -> torch.FloatTensor:
+        query_seq_len, batch_size, _ = query.size()
+        key_seq_len, _, _ = key.size()
 
-        return x_rotated
+        queries = self.query(query).view(query_seq_len, batch_size, self.num_heads, self.head_dim)
+        keys = self.key(key).view(key_seq_len, batch_size, self.num_heads, self.head_dim)
+        values = self.value(value).view(key_seq_len, batch_size, self.num_heads, self.head_dim)
 
-    def rotate_half(self, x):
-        x1, x2 = x[..., :self.channels // 2], x[..., self.channels // 2:]
-        return torch.cat((-x2, x1), dim=-1)
+        queries = (torch.nn.functional.elu(queries) + 1.0) * self.scaling
+        keys = (torch.nn.functional.elu(keys) + 1.0)
 
+        if not key_padding_mask is None:
+            key_padding_mask = key_padding_mask.T[:, :, None, None] # [Key_t, Batch, 1, 1]
+            keys.masked_fill_(key_padding_mask, 0.0)
+
+        keys_and_values = einsum(keys, values, 'key_length batch head key_d, key_length batch head value_d -> batch head key_d value_d')
+        keys_sum = keys.sum(dim= 0, keepdim= True)  # [1, Batch, Head_n, Head_d]
+        contexts = einsum(queries, keys_and_values, 'query_length batch head query_d, batch head query_d value_d -> query_length batch head value_d')
+        normalizer = einsum(queries, keys_sum, 'query_length batch head query_d, x batch head query_d -> query_length batch head x') + 1e-5
+
+        contexts = contexts / normalizer
+        contexts = contexts.contiguous().view(query_seq_len, batch_size, self.embed_dim)
+        contexts = self.projection(contexts)
+
+        return contexts
+
+class MultiHeadAttentionWithRoPE(torch.nn.Module):
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        k_dim: Optional[int]= None,
+        v_dim: Optional[int]= None,
+        ):
+        super().__init__()        
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+
+        assert embed_dim % num_heads == 0, 'embed_dim must be divisible by num_heads'
+        assert self.head_dim % 2 == 0, 'head_dim must be divisible by 2 for RoPE'
+        
+        k_dim = k_dim or embed_dim
+        v_dim = v_dim or k_dim
+        
+        self.q_proj = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+        self.k_proj = Conv_Init(
+            torch.nn.Linear(k_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+        self.v_proj = Conv_Init(
+            torch.nn.Linear(v_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+        
+        self.o_proj = Conv_Init(
+            torch.nn.Linear(embed_dim, embed_dim, bias= False),
+            w_init_gain= 'linear'
+            )
+
+    def forward(
+        self,
+        query: torch.FloatTensor,
+        key: torch.FloatTensor,
+        value: torch.FloatTensor,
+        key_padding_mask: Optional[torch.BoolTensor]= None,
+        need_weights: bool= False,
+        attn_mask: Optional[torch.BoolTensor]= None,
+        average_attn_weights: bool= True
+        ):
+        '''
+        query: [Query_t, Batch, Query_d]
+        key: [Key_t, Batch, Key_d]
+        value: [Value_t, Batch, Value_d], Key_t == Value_t
+        attn_mask: [Batch, Query_t, Key_t]
+        '''
+        query_lengths, batch_size, _ = query.size()
+        key_lengths, _, _ = key.size()
+
+        # Linear projections
+        Q = self.q_proj(query)  # [Query_t, Batch, Query_d]
+
+        K = self.k_proj(key)    # [Key_t, Batch, Query_d]
+        V = self.v_proj(value)  # [Key_t, Batch, Query_d]
+
+        # Reshape
+        Q = rearrange(
+            tensor= Q,
+            pattern= 'query_t batch (num_head head_d) -> batch num_head query_t head_d',
+            num_head= self.num_heads,
+            head_d= self.head_dim
+            )   # [Batch, Head, Query_t, Head_d]
+        K = rearrange(
+            tensor= K,
+            pattern= 'key_t batch (num_head head_d) -> batch num_head key_t head_d',
+            num_head= self.num_heads,
+            head_d= self.head_dim
+            )   # [Batch, Head, Key_t, Head_d]
+        V = rearrange(
+            tensor= V,
+            pattern= 'key_t batch (num_head head_d) -> batch num_head key_t head_d',
+            num_head= self.num_heads,
+            head_d= self.head_dim
+            )   # [Batch, Head, Key_t, Head_d]
+
+        # Apply RoPE
+        Q = self.apply_rope(Q)
+        K = self.apply_rope(K)
+
+        # Scaled Dot-Product Attention using PyTorch's native function
+        Q = rearrange(
+            tensor= Q,
+            pattern= 'batch num_head query_t head_d -> (batch num_head) query_t head_d',
+            )   # [Batch * Head, Query_t, Head_d]
+        K = rearrange(
+            tensor= K,
+            pattern= 'batch num_head key_t head_d -> (batch num_head) key_t head_d',
+            )   # [Batch * Head, Key_t, Head_d]
+        V = rearrange(
+            tensor= V,
+            pattern= 'batch num_head key_t head_d -> (batch num_head) key_t head_d',
+            )   # [Batch * Head, Key_t, Head_d]
+
+        if not attn_mask is None:
+            attn_mask = rearrange(
+                tensor= attn_mask[:, None, :query_lengths, :key_lengths].expand(-1, self.num_heads, -1 , -1).float(),   # flash attention use float type mask, indexing is because of eval inference problem
+                pattern= 'batch num_head query_t key_t -> (batch num_head) query_t key_t',
+                )   # [Batch * Head, Query_t, Key_t]
+        else:
+            # make attn_mask
+            attn_mask = torch.zeros(
+                size= (batch_size * self.num_heads, query_lengths, key_lengths),
+                device= Q.device
+                )   # [Batch * Head, Query_t, Key_t]
+
+        if not key_padding_mask is None:
+            key_padding_mask = key_padding_mask[:, None, None, :].expand(
+                batch_size,
+                self.num_heads,
+                1,
+                key_lengths
+                )
+            key_padding_mask = rearrange(
+                key_padding_mask,
+                'batch_size num_head x key_t -> (batch_size num_head) x key_t'
+                )
+            attn_mask = attn_mask + key_padding_mask.float()    # [Batch * Head, 1, Key_t], 
+        attn_mask = attn_mask * -1e+5 # float(torch.finfo(attn_mask.dtype).min)
+
+        output = torch.nn.functional.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask) # [Batch * Head, Query_t, Head_d]
+
+        # Reshape
+        output = rearrange(
+            tensor= output,
+            pattern= '(batch num_head) query_t head_d -> query_t batch (num_head head_d)',
+            batch= batch_size,
+            num_head= self.num_heads
+            )   # [Batch * Head, Query_t, Head_d] -> [Query_t, Batch, Query_d]
+        
+        output = self.o_proj(output)
+
+        alignments = None
+        if need_weights:
+            scaling = float(self.head_dim) ** -0.5
+            attn_weights = torch.bmm(Q * scaling, K.mT)
+            # if not key_padding_mask is None:
+            # attn_weights = attn_weights.masked_fill(
+            #     attn_mask.bool(),
+            #     float(torch.finfo(attn_weights.dtype).min)
+            #     )
+            attn_weights = attn_weights + attn_mask
+            alignments = torch.softmax(attn_weights, dim=-1)    # [Batch * Head, Query_t, Key_t]
+            alignments = rearrange(
+                alignments,
+                '(batch num_head) query_t key_t -> batch num_head query_t key_t',
+                batch= batch_size,
+                num_head = self.num_heads
+                )
+            if average_attn_weights:
+                alignments = alignments.mean(dim= 1)    # [Batch, Query_t, Key_t]
+
+        return output, alignments
+
+
+    def apply_rope(self, x):
+        '''
+        Apply Rotary Position Embedding (RoPE) to the given tensor.
+        Args:
+            x: Tensor of shape (batch_size, num_heads, seq_len, head_dim)
+        Returns:
+            Tensor with RoPE applied.
+        '''
+        _, _, seq_len, head_dim = x.size()
+
+        # Create position index and scaling factors
+        theta = 1.0 / (10000 ** (torch.arange(0, head_dim // 2, device=x.device).float() / (head_dim // 2)))    # [Head_d / 2]
+        pos = torch.arange(0, seq_len, device= x.device).float()    # [X_t]
+        
+        # Compute sinusoidal embeddings
+        sinusoid = einsum(pos, theta, 'lengths, dim -> lengths dim')    # [X_t, Head_d / 2]
+        sin, cos = sinusoid.sin(), sinusoid.cos()
+        sin = sin[None, None, :, :] # [1, 1, X_t, Head_d / 2]
+        cos = cos[None, None, :, :] # [1, 1, X_t, Head_d / 2]
+
+        x1, x2 = x.chunk(chunks= 2, dim= 3) # [Batch, Head, X_t, Head_d / 2] * 2
+        x_rope = torch.cat([
+            x1 * cos - x2 * sin,
+            x1 * sin + x2 * cos
+            ], dim= 3)  # [Batch, Head, X_t, Head_d]
+
+        return x_rope
 
 class Positional_Encoding(torch.nn.Module):
     def __init__(

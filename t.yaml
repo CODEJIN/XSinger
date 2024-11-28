@@ -50,7 +50,6 @@ Encoder:
             Dropout_Rate: 0.1
     Cross_Attention:
         Head: 2
-        Attention_Prior_Extra_Width_Factor: 2
     Prior_Encoder:
         Stack: 4
         Head: 2
@@ -83,21 +82,21 @@ Diffusion:
     Network_Prediction: 'Flow'   # 'Flow', 'Noise'
 
 
-Token_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Token.yaml'
-Mel_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Mel_Info.yaml'
-F0_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/F0_Info.yaml'
-Singer_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Singer_Info.yaml'
-Genre_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Genre_Info.yaml'
-Language_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Language_Info.yaml'
+Token_Path: '/mnt/f/Datasets/X/Token.yaml'
+Mel_Info_Path: '/mnt/f/Datasets/X/Mel_Info.yaml'
+F0_Info_Path: '/mnt/f/Datasets/X/F0_Info.yaml'
+Singer_Info_Path: '/mnt/f/Datasets/X/Singer_Info.yaml'
+Genre_Info_Path: '/mnt/f/Datasets/X/Genre_Info.yaml'
+Language_Info_Path: '/mnt/f/Datasets/X/Language_Info.yaml'
 Train:
     Pattern_Cache: false
     Train_Pattern:
-        Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Train'
+        Path: '/mnt/f/Datasets/X/Train'
         Metadata_File: 'METADATA.PICKLE'
         Accumulated_Dataset_Epoch: 1000 # This is to prevent slow down from torch.utils.data.DataLoader when the number of patterns is small.
         Augmentation_Ratio: 0.10
     Eval_Pattern:
-        Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Eval'
+        Path: '/mnt/f/Datasets/X/Eval'
         Metadata_File: 'METADATA.PICKLE'
         Accumulated_Dataset_Epoch: 32   # When singer is 1, evaluation pattern is also 1. Because offset is selected randomly, this is meaningful.
     Num_Workers: 2

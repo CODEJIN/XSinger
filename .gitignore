@@ -3,7 +3,6 @@
 wandb
 results
 Pattern_Generator_Secret.py
-temp.py
 error_log.txt
 LJ_Load.pickle
 
@@ -11,3 +10,9 @@ hificodec/
 results*
 dac/
 VCTK_Load.pickle
+note_error/
+note_fix/
+.vscode/settings.json
+Train_.py
+temp*.py
+BigVGAN_24K_100band_256x.pts
