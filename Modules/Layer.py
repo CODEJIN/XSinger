@@ -601,14 +601,16 @@ class MultiHeadAttentionWithRoPE(torch.nn.Module):
         query: torch.FloatTensor,
         key: torch.FloatTensor,
         value: torch.FloatTensor,
-        key_padding_mask: Optional[torch.Tensor]= None,
+        key_padding_mask: Optional[torch.BoolTensor]= None,
         need_weights: bool= False,
+        attn_mask: Optional[torch.BoolTensor]= None,
         average_attn_weights: bool= True
         ):
         '''
         query: [Query_t, Batch, Query_d]
         key: [Key_t, Batch, Key_d]
         value: [Value_t, Batch, Value_d], Key_t == Value_t
+        attn_mask: [Batch, Query_t, Key_t]
         '''
         query_lengths, batch_size, _ = query.size()
         key_lengths, _, _ = key.size()
@@ -657,11 +659,18 @@ class MultiHeadAttentionWithRoPE(torch.nn.Module):
             pattern= 'batch num_head key_t head_d -> (batch num_head) key_t head_d',
             )   # [Batch * Head, Key_t, Head_d]
 
-        # make attn_mask
-        attn_mask = torch.zeros(
-            size= (batch_size * self.num_heads, query_lengths, key_lengths),
-            device= Q.device
-            )   # [Batch * Head, Query_t, Key_t]
+        if not attn_mask is None:
+            attn_mask = rearrange(
+                tensor= attn_mask[:, None, :query_lengths, :key_lengths].expand(-1, self.num_heads, -1 , -1).float(),   # flash attention use float type mask, indexing is because of eval inference problem
+                pattern= 'batch num_head query_t key_t -> (batch num_head) query_t key_t',
+                )   # [Batch * Head, Query_t, Key_t]
+        else:
+            # make attn_mask
+            attn_mask = torch.zeros(
+                size= (batch_size * self.num_heads, query_lengths, key_lengths),
+                device= Q.device
+                )   # [Batch * Head, Query_t, Key_t]
+
         if not key_padding_mask is None:
             key_padding_mask = key_padding_mask[:, None, None, :].expand(
                 batch_size,
@@ -673,7 +682,8 @@ class MultiHeadAttentionWithRoPE(torch.nn.Module):
                 key_padding_mask,
                 'batch_size num_head x key_t -> (batch_size num_head) x key_t'
                 )
-            attn_mask = attn_mask + key_padding_mask.float()    # [Batch * Head, 1, Key_t], flash attention use float type mask
+            attn_mask = attn_mask + key_padding_mask.float()    # [Batch * Head, 1, Key_t], 
+        attn_mask = attn_mask * -1e+5 # float(torch.finfo(attn_mask.dtype).min)
 
         output = torch.nn.functional.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask) # [Batch * Head, Query_t, Head_d]
 
@@ -691,11 +701,12 @@ class MultiHeadAttentionWithRoPE(torch.nn.Module):
         if need_weights:
             scaling = float(self.head_dim) ** -0.5
             attn_weights = torch.bmm(Q * scaling, K.mT)
-            if not key_padding_mask is None:
-                attn_weights = attn_weights.masked_fill(
-                    key_padding_mask,
-                    float(torch.finfo(attn_weights.dtype).min)
-                    )
+            # if not key_padding_mask is None:
+            # attn_weights = attn_weights.masked_fill(
+            #     attn_mask.bool(),
+            #     float(torch.finfo(attn_weights.dtype).min)
+            #     )
+            attn_weights = attn_weights + attn_mask
             alignments = torch.softmax(attn_weights, dim=-1)    # [Batch * Head, Query_t, Key_t]
             alignments = rearrange(
                 alignments,

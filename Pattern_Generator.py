@@ -2044,9 +2044,6 @@ def Metadata_Generate(
             open(hp.F0_Info_Path, 'w')
             )
 
-
-        print(set(tokens))
-        assert False
         Token_Dict_Generate(hp, sorted(list(set(tokens))))
 
         singer_index_dict = {
