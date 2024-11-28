@@ -50,12 +50,13 @@ def _Calc_Masks(
     token_on_note_length: np.ndarray,
     note_duration: np.ndarray,
     max_token_length: int,
-    max_latent_length: int
+    max_latent_length: int,
+    extra_width_factor: int= 10
     ):
     all_token_on_note_length = token_on_note_length.sum()
     all_note_duration = note_duration.sum()
-    token_extra_width = token_on_note_length.sum() // 10
-    latent_extra_width = note_duration.sum() // 10
+    token_extra_width = max(1, token_on_note_length.sum() // extra_width_factor)
+    latent_extra_width = max(1, note_duration.sum() // extra_width_factor)
 
     mask = np.ones((max_token_length, max_latent_length))
     mask[all_token_on_note_length:] = 0
@@ -63,8 +64,8 @@ def _Calc_Masks(
     token_start_index, latent_start_index = 0, 0
     for token_length, latent_length in zip(token_on_note_length, note_duration):
         mask[
-            max(0, token_start_index - token_length - token_extra_width):min(token_start_index + token_length + token_extra_width, all_token_on_note_length),
-            max(0, latent_start_index - latent_length - latent_extra_width):min(latent_start_index + latent_length + latent_extra_width, all_note_duration)
+            max(0, token_start_index - token_extra_width):min(token_start_index + token_length + token_extra_width, all_token_on_note_length),
+            max(0, latent_start_index - latent_extra_width):min(latent_start_index + latent_length + latent_extra_width, all_note_duration)
             ] = 0.0
         token_start_index += token_length
         latent_start_index += latent_length

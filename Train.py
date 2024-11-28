@@ -17,7 +17,7 @@ from typing import List
 
 from Modules.Modules import RectifiedFlowSVS, Mask_Generate, Length_Regulate
 from Datasets import Dataset, Inference_Dataset, Collater, Inference_Collater
-from Modules.Guided_Attention_ha import Guided_Attention_Loss
+from Modules.Guided_Attention_Hard import Guided_Attention_Loss
 
 from meldataset import mel_spectrogram
 from Arg_Parser import Recursive_Parse, To_Non_Recursive_Dict
