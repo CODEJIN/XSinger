@@ -14,13 +14,6 @@ def Lyric_to_Token(lyric: List[str], token_dict: Dict[str, int]):
         for letter in list(lyric)
         ]
 
-def Alignment(lengths: Union[List[int], np.ndarray]) -> np.ndarray:
-    alignment = np.zeros(shape= (len(lengths), sum(lengths)), dtype= int)
-
-    start = 0
-    for row_index, length in enumerate(lengths):
-        alignment[row_index, start:start + length] = 1
-
 def Token_Stack(tokens: List[List[int]], token_dict: Dict[str, int], max_length: Optional[int]= None):
     max_token_length = max_length or max([len(token) for token in tokens])
     tokens = np.stack(

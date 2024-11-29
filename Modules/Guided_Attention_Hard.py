@@ -3,10 +3,6 @@ import numpy as np
 from numba import jit
 
 class Guided_Attention_Loss(torch.nn.Module):
-    def __init__(self, sigma= 0.2):
-        super().__init__()
-        self.sigma = sigma
-
     def forward(
         self,
         alignments,

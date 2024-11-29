@@ -94,23 +94,22 @@ Train:
     Train_Pattern:
         Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Train'
         Metadata_File: 'METADATA.PICKLE'
-        Accumulated_Dataset_Epoch: 1000 # This is to prevent slow down from torch.utils.data.DataLoader when the number of patterns is small.
+        Accumulated_Dataset_Epoch: 100 # This is to prevent slow down from torch.utils.data.DataLoader when the number of patterns is small.
         Augmentation_Ratio: 0.10
     Eval_Pattern:
         Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Eval'
         Metadata_File: 'METADATA.PICKLE'
-        Accumulated_Dataset_Epoch: 32   # When singer is 1, evaluation pattern is also 1. Because offset is selected randomly, this is meaningful.
+        Accumulated_Dataset_Epoch: 4   # When singer is 1, evaluation pattern is also 1. Because offset is selected randomly, this is meaningful.
     Num_Workers: 2
     Batch_Size: 32
     Pattern_Length:
         Min: 384
         Max: 768
-    Guided_Attention_Sigma: 0.35
     Num_Combination: 3
     Learning_Rate:
         Initial: 1.0e-4
         Decay: 0.999875
-        Decay_Epoch: 1000
+        Decay_Epoch: 10
         Lambda:
             Cross_Attention: 10.0
     ADAM:
@@ -167,7 +166,7 @@ Weights_and_Biases:
         Use: false
         Interval: 50000 # Unlike local, The capacity of WandB is small.
 
-Use_Mixed_Precision: true
+Use_Mixed_Precision: false
 # Use_Multi_GPU: true
 # Device: '0,1,2,3,4,5,6,7'
 Use_Multi_GPU: false

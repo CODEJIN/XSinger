@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Union
 from tqdm import tqdm
 from torchdiffeq import odeint
 
-from .Layer import Conv_Init, Lambda, FFT_Block
+from .Layer import Conv_Init, Lambda, FFT_Block, Norm_Type
 
 class Diffusion(torch.nn.Module):
     def __init__(
@@ -173,13 +173,12 @@ class Network(torch.nn.Module):
             FFT_Block(
                 channels= self.hp.Diffusion.Size,
                 num_head= self.hp.Diffusion.Transformer.Head,
-                residual_conv_stack= self.hp.Diffusion.Transformer.Residual_Conv.Stack,
-                residual_conv_kernel_size= self.hp.Diffusion.Transformer.Residual_Conv.Kernel_Size,
                 ffn_kernel_size= self.hp.Diffusion.Transformer.FFN.Kernel_Size,
-                residual_conv_dropout_rate= self.hp.Diffusion.Transformer.Residual_Conv.Dropout_Rate,
                 ffn_dropout_rate= self.hp.Diffusion.Transformer.FFN.Dropout_Rate,
+                norm_type= Norm_Type.Conditional_LayerNorm if index == 0 else Norm_Type.LayerNorm,
+                layer_norm_condition_channels= self.hp.Diffusion.Size if index == 0 else None
                 )
-            for _ in range(self.hp.Diffusion.Transformer.Stack)
+            for index in range(self.hp.Diffusion.Transformer.Stack)
             ])  # real type: torch.nn.ModuleList[FFT_BLock]
 
         self.projection = torch.nn.Sequential(
@@ -214,10 +213,14 @@ class Network(torch.nn.Module):
         singers = self.singer_ffn(singers)
         diffusion_steps = self.step_ffn(diffusion_steps) # [Batch, Res_d, 1]
 
-        x = x + encodings + singers + diffusion_steps
+        conditions = encodings + singers + diffusion_steps
 
         for block in self.blocks:
-            x = block(x, lengths)
+            x = block(
+                x= x,
+                lengths= lengths,
+                layer_norm_conditions= conditions
+                )
 
         x = self.projection(x)
 

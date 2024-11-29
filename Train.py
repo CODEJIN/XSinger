@@ -66,6 +66,7 @@ class Trainer:
             self.device = self.accelerator.device
             torch.backends.cudnn.enabled = True
             torch.backends.cudnn.benchmark = False
+            torch.backends.cudnn.deterministic = True
         
         self.steps = steps
 
@@ -207,7 +208,7 @@ class Trainer:
 
         self.criterion_dict = {
             'MSE': torch.nn.MSELoss(reduction= 'none').to(self.device),
-            'GA': Guided_Attention_Loss(sigma= self.hp.Train.Guided_Attention_Sigma),
+            'GA': Guided_Attention_Loss(),
             }
 
         self.optimizer_dict = {

@@ -222,14 +222,11 @@ class Lyric_Encoder(torch.nn.Module):
             FFT_Block(
                 channels= self.hp.Encoder.Size,
                 num_head= self.hp.Encoder.Lyric_Encoder.Head,
-                residual_conv_stack= self.hp.Encoder.Lyric_Encoder.Residual_Conv.Stack,
-                residual_conv_kernel_size= self.hp.Encoder.Lyric_Encoder.Residual_Conv.Kernel_Size,
                 ffn_kernel_size= self.hp.Encoder.Lyric_Encoder.FFN.Kernel_Size,
-                residual_conv_dropout_rate= self.hp.Encoder.Lyric_Encoder.Residual_Conv.Dropout_Rate,
                 ffn_dropout_rate= self.hp.Encoder.Lyric_Encoder.FFN.Dropout_Rate,
                 norm_type= Norm_Type.Mixed_LayerNorm if index == 0 else Norm_Type.LayerNorm,
-                condition_channels= self.hp.Encoder.Size,
-                beta_distribution_concentration= self.hp.Encoder.Lyric_Encoder.Beta_Distribution_Concentration
+                layer_norm_condition_channels= self.hp.Encoder.Size if index == 0 else None,
+                beta_distribution_concentration= self.hp.Encoder.Lyric_Encoder.Beta_Distribution_Concentration if index == 0 else None
                 )
             for index in range(self.hp.Encoder.Lyric_Encoder.Stack)
             ])  # real type: torch.nn.ModuleList[FFT_BLock]
@@ -261,8 +258,8 @@ class Lyric_Encoder(torch.nn.Module):
         for block in self.blocks:
             encodings = block(
                 x= encodings,
-                conditions= singers,
-                lengths= lengths
+                lengths= lengths,
+                layer_norm_conditions= singers,
                 )
 
         return encodings * float_masks
@@ -291,10 +288,7 @@ class Melody_Encoder(torch.nn.Module):
             FFT_Block(
                 channels= self.hp.Encoder.Size,
                 num_head= self.hp.Encoder.Melody_Encoder.Head,
-                residual_conv_stack= self.hp.Encoder.Melody_Encoder.Residual_Conv.Stack,
-                residual_conv_kernel_size= self.hp.Encoder.Melody_Encoder.Residual_Conv.Kernel_Size,
                 ffn_kernel_size= self.hp.Encoder.Melody_Encoder.FFN.Kernel_Size,
-                residual_conv_dropout_rate= self.hp.Encoder.Melody_Encoder.Residual_Conv.Dropout_Rate,
                 ffn_dropout_rate= self.hp.Encoder.Melody_Encoder.FFN.Dropout_Rate,
                 )
             for _ in range(self.hp.Encoder.Melody_Encoder.Stack)
@@ -342,10 +336,7 @@ class Phoneme_to_Note_Encoder(torch.nn.Module):
             FFT_Block(
                 channels= self.hp.Encoder.Size,
                 num_head= self.hp.Encoder.Phoneme_to_Note_Encoder.Head,
-                residual_conv_stack= self.hp.Encoder.Phoneme_to_Note_Encoder.Residual_Conv.Stack,
-                residual_conv_kernel_size= self.hp.Encoder.Phoneme_to_Note_Encoder.Residual_Conv.Kernel_Size,
                 ffn_kernel_size= self.hp.Encoder.Phoneme_to_Note_Encoder.FFN.Kernel_Size,
-                residual_conv_dropout_rate= self.hp.Encoder.Phoneme_to_Note_Encoder.Residual_Conv.Dropout_Rate,
                 ffn_dropout_rate= self.hp.Encoder.Phoneme_to_Note_Encoder.FFN.Dropout_Rate,
                 )
             for _ in range(self.hp.Encoder.Phoneme_to_Note_Encoder.Stack)
@@ -386,15 +377,12 @@ class Prior_Encoder(torch.nn.Module):
             FFT_Block(
                 channels= self.hp.Encoder.Size,
                 num_head= self.hp.Encoder.Prior_Encoder.Head,
-                residual_conv_stack= self.hp.Encoder.Prior_Encoder.Residual_Conv.Stack,
-                residual_conv_kernel_size= self.hp.Encoder.Prior_Encoder.Residual_Conv.Kernel_Size,
                 ffn_kernel_size= self.hp.Encoder.Prior_Encoder.FFN.Kernel_Size,
-                residual_conv_dropout_rate= self.hp.Encoder.Prior_Encoder.Residual_Conv.Dropout_Rate,
                 ffn_dropout_rate= self.hp.Encoder.Prior_Encoder.FFN.Dropout_Rate,
-                norm_type= Norm_Type.Conditional_LayerNorm,
-                condition_channels= self.hp.Encoder.Size
+                norm_type= Norm_Type.Conditional_LayerNorm if index == 0 else Norm_Type.LayerNorm,
+                layer_norm_condition_channels= self.hp.Encoder.Size if index == 0 else None
                 )
-            for _ in range(self.hp.Encoder.Prior_Encoder.Stack)
+            for index in range(self.hp.Encoder.Prior_Encoder.Stack)
             ])  # real type: torch.nn.ModuleList[FFT_BLock]
 
     def forward(
@@ -410,8 +398,8 @@ class Prior_Encoder(torch.nn.Module):
         for block in self.blocks:
             encodings = block(
                 x= encodings,
-                conditions= singers,
-                lengths= lengths
+                lengths= lengths,
+                layer_norm_conditions= singers
                 )
 
         return encodings
