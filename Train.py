@@ -18,6 +18,7 @@ from typing import List
 from Modules.Modules import RectifiedFlowSVS, Mask_Generate, Length_Regulate
 from Datasets import Dataset, Inference_Dataset, Collater, Inference_Collater
 from Modules.Guided_Attention_Hard import Guided_Attention_Loss
+# from Modules.Guided_Attention_Soft import Guided_Attention_Loss
 
 from meldataset import mel_spectrogram
 from Arg_Parser import Recursive_Parse, To_Non_Recursive_Dict
@@ -209,6 +210,10 @@ class Trainer:
         self.criterion_dict = {
             'MSE': torch.nn.MSELoss(reduction= 'none').to(self.device),
             'GA': Guided_Attention_Loss(),
+            'TokenCTC': torch.nn.CTCLoss(
+                blank= self.hp.Tokens,  # == Token length
+                zero_infinity= True
+                ),
             }
 
         self.optimizer_dict = {
@@ -248,7 +253,7 @@ class Trainer:
         ):
         loss_dict = {}
         with self.accelerator.accumulate(self.model_dict['RectifiedFlowSVS']):
-            flows, prediction_flows, prediction_mels, cross_attention_alignments = self.model_dict['RectifiedFlowSVS'](
+            flows, prediction_flows, prediction_mels, cross_attention_alignments, prediction_tokens = self.model_dict['RectifiedFlowSVS'](
                 tokens= tokens,
                 languages= languages,
                 token_lengths= token_lengths,
@@ -281,12 +286,19 @@ class Trainer:
                 # query_lengths= mel_lengths,
                 # key_lengths= token_lengths
                 )
+            loss_dict['Token'] = self.criterion_dict['TokenCTC'](
+                log_probs= prediction_tokens.permute(2, 0, 1),  # [Latent_t, Batch, Token_n]
+                targets= tokens,
+                input_lengths= mel_lengths,
+                target_lengths= token_lengths
+                )
             
             self.optimizer_dict['RectifiedFlowSVS'].zero_grad()
             self.accelerator.backward(
                 loss_dict['Diffusion'] +
                 loss_dict['Linear'] +
-                loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention
+                loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention +
+                loss_dict['Token']
                 )
 
             if self.hp.Train.Gradient_Norm > 0.0:
@@ -378,7 +390,7 @@ class Trainer:
         mel_lengths: torch.IntTensor,
         ):
         loss_dict = {}
-        flows, prediction_flows, prediction_mels, cross_attention_alignments = self.model_dict['RectifiedFlowSVS'](
+        flows, prediction_flows, prediction_mels, cross_attention_alignments, prediction_tokens = self.model_dict['RectifiedFlowSVS'](
             tokens= tokens,
             languages= languages,
             token_lengths= token_lengths,
@@ -410,6 +422,12 @@ class Trainer:
             note_durations = durations
             # query_lengths= mel_lengths,
             # key_lengths= token_lengths
+            )
+        loss_dict['Token'] = self.criterion_dict['TokenCTC'](
+            log_probs= prediction_tokens.permute(2, 0, 1),  # [Latent_t, Batch, Token_n]
+            targets= tokens,
+            input_lengths= mel_lengths,
+            target_lengths= token_lengths
             )
 
         for tag, loss in loss_dict.items():
@@ -644,7 +662,7 @@ class Trainer:
                 audio
                 )
             
-    def Inference_Epoch(self):            
+    def Inference_Epoch(self):
         logging.info('(Steps: {}) Start inference.'.format(self.steps))
 
         for model in self.model_dict.values():

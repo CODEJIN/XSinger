@@ -16,7 +16,6 @@ from typing import Dict, Union
 from meldataset import mel_spectrogram
 from Phonemize import Phonemize, Language, _Korean_Syllablize, _Chinese_Syllablize, _Japanese_Syllable_to_IPA
 
-from hificodec.vqvae import VQVAE
 from Arg_Parser import Recursive_Parse
 
 import matplotlib as mpl
@@ -36,11 +35,6 @@ if __name__ == '__main__':
         device = torch.device('cpu')
     else:
         device = torch.device('cuda:0')
-    hificodec = VQVAE(
-        config_path= './hificodec/config_24k_320d.json',
-        ckpt_path= './hificodec/HiFi-Codec-24k-320d',
-        with_encoder= True
-        ).to(device)
 
 def AIHub_Mediazen(
     hyper_paramters: Namespace,

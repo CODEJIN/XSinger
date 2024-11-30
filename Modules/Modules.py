@@ -6,6 +6,8 @@ from typing import Union, List, Optional, Tuple
 from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Norm_Type, MultiHeadAttentionWithRoPE
 from .Diffusion import Diffusion
 
+# TODO: token predictor add.
+
 class RectifiedFlowSVS(torch.nn.Module):
     def __init__(
         self,
@@ -26,6 +28,8 @@ class RectifiedFlowSVS(torch.nn.Module):
             ), w_init_gain= 'linear')
 
         self.diffusion = Diffusion(self.hp)
+
+        self.token_predictor = Token_Predictor(self.hp)
 
     def forward(
         self,
@@ -63,7 +67,9 @@ class RectifiedFlowSVS(torch.nn.Module):
             lengths= mel_lengths,
             )
 
-        return flows, prediction_flows, prediction_mels, cross_attention_alignments
+        prediction_tokens = self.token_predictor(encodings)
+
+        return flows, prediction_flows, prediction_mels, cross_attention_alignments, prediction_tokens
     
     def Inference(
         self,
@@ -440,6 +446,48 @@ class Duration_Positional_Encoding(torch.nn.Embedding):
     def get_pe(x: torch.Tensor, pe: torch.Tensor):
         pe = pe.repeat(1, 1, math.ceil(x.size(2) / pe.size(2))) 
         return pe[:, :, :x.size(2)]
+
+class Token_Predictor(torch.nn.Module): 
+    def __init__(
+        self,
+        hyper_parameters: Namespace
+        ):
+        super().__init__()
+        self.hp = hyper_parameters
+        
+        self.lstm = torch.nn.LSTM(
+            input_size= self.hp.Encoder.Size,
+            hidden_size= self.hp.Token_Predictor.Size,
+            num_layers= self.hp.Token_Predictor.LSTM.Stack,
+            )
+        self.lstm_dropout = torch.nn.Dropout(
+            p= self.hp.Token_Predictor.LSTM.Dropout_Rate,
+            )
+
+        self.projection = Conv_Init(torch.nn.Conv1d(
+            in_channels= self.hp.Token_Predictor.Size,
+            out_channels= self.hp.Tokens + 1,
+            kernel_size= 1,
+            ), w_init_gain= 'linear')
+            
+    def forward(
+        self,
+        encodings: torch.Tensor,
+        ) -> torch.Tensor:
+        '''
+        features: [Batch, Feature_d, Feature_t], Spectrogram
+        lengths: [Batch]
+        '''
+        encodings = encodings.permute(2, 0, 1)    # [Feature_t, Batch, Enc_d]
+        
+        self.lstm.flatten_parameters()
+        encodings = self.lstm(encodings)[0] # [Feature_t, Batch, LSTM_d]
+        
+        predictions = self.projection(encodings.permute(1, 2, 0))
+        predictions = torch.nn.functional.log_softmax(predictions, dim= 1)
+
+        return predictions
+
 
 def Length_Regulate(
     durations: torch.IntTensor,
