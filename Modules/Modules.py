@@ -3,10 +3,8 @@ import torch
 import math
 from typing import Union, List, Optional, Tuple
 
-from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Norm_Type, MultiHeadAttentionWithRoPE
+from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Norm_Type
 from .Diffusion import Diffusion
-
-# TODO: token predictor add.
 
 class RectifiedFlowSVS(torch.nn.Module):
     def __init__(
@@ -104,7 +102,10 @@ class RectifiedFlowSVS(torch.nn.Module):
             )
         mels = (mels + 1.0) / 2.0 * (self.mel_max - self.mel_min) + self.mel_min
 
-        return mels, cross_attention_alignments
+        temp_mels = self.linear_projection(encodings)
+
+
+        return mels, cross_attention_alignments, temp_mels
 
 class Encoder(torch.nn.Module):
     def __init__(
@@ -123,13 +124,7 @@ class Encoder(torch.nn.Module):
         self.lyric_encoder = Lyric_Encoder(self.hp)
         self.melody_encoder = Melody_Encoder(self.hp)
         self.phoneme_to_note_encoder = Phoneme_to_Note_Encoder(self.hp)
-
-        self.cross_attention = MultiHeadAttentionWithRoPE(
-            embed_dim= self.hp.Encoder.Size,
-            num_heads= self.hp.Encoder.Cross_Attention.Head
-            )
-        self.cross_attention_norm = torch.nn.LayerNorm(self.hp.Encoder.Size)
-
+        self.phoneme_to_note_cross_encoder = Phoneme_to_Note_Cross_Encoder(self.hp)
         self.prior_encoder = Prior_Encoder(self.hp)
 
     def forward(
@@ -143,7 +138,7 @@ class Encoder(torch.nn.Module):
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         mel_lengths: torch.IntTensor
-        ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+        ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         '''
         tokens: [Batch, Enc_t]
         languages: [Batch, Enc_t]
@@ -169,7 +164,7 @@ class Encoder(torch.nn.Module):
         token_to_note_alignments = (Length_Regulate(token_on_note_lengths, lyric_encodings.size(2)) / token_on_note_lengths[:, None, :].clamp(1.0))  # [Batch, Token_t, Note_t]
         
         pooled_lyric_encodings: torch.FloatTensor = lyric_encodings @ token_to_note_alignments  # [Batch, Enc_d, Note_t]
-        pooled_lyric_encodings: torch.FloatTensor = self.phoneme_to_note_encoder.forward(
+        pooled_lyric_encodings: torch.FloatTensor = self.phoneme_to_note_encoder(
             encodings= pooled_lyric_encodings,
             lengths= note_lengths
             )   # [Batch, Enc_d, Note_t]
@@ -178,21 +173,14 @@ class Encoder(torch.nn.Module):
 
         note_to_decoding_alignments = Length_Regulate(durations).mT # [Batch, Note_t, Dec_t]
         melody_encodings = (melody_encodings + pooled_lyric_encodings) @ note_to_decoding_alignments # [Batch, Enc_d, Dec_t]
-        melody_encodings = melody_encodings.permute(2, 0, 1)
-
-        encodings, cross_attention_alignments = self.cross_attention(
-            query= melody_encodings,
-            key= lyric_encodings.permute(2, 0, 1),
-            value= lyric_encodings.permute(2, 0, 1),
-            key_padding_mask= Mask_Generate(
-                lengths= token_lengths,
-                max_length= torch.ones_like(lyric_encodings[0, 0]).sum()
-                ),
-            need_weights= True
-            )   # [Dec_t, Batch, Enc_d], [Batch, Dec_t, Token_t]
-        encodings = self.cross_attention_norm(melody_encodings + encodings)
-        encodings = encodings.permute(1, 2, 0) # [Batch, Enc_d, Dec_t]
         
+        encodings, cross_attention_alignments = self.phoneme_to_note_cross_encoder(
+            melody_encodings= melody_encodings,
+            melody_lengths= mel_lengths,
+            lyric_encodings= lyric_encodings,
+            lyric_lengths= token_lengths
+            )
+
         singers = singers @ token_to_note_alignments @ note_to_decoding_alignments  # [Batch, Enc_d, Dec_t]
 
         encodings: torch.FloatTensor = self.prior_encoder(
@@ -260,7 +248,7 @@ class Lyric_Encoder(torch.nn.Module):
         languages = self.language_embedding(languages)  # [Batch, Token_t, Enc_d / 2]
 
         encodings = torch.cat([tokens, languages], dim= 2).mT * float_masks # [Batch, Enc_d, Token_t]
-
+        
         for block in self.blocks:
             encodings = block(
                 x= encodings,
@@ -370,6 +358,67 @@ class Phoneme_to_Note_Encoder(torch.nn.Module):
                 )
 
         return encodings * float_masks
+
+class Phoneme_to_Note_Cross_Encoder(torch.nn.Module):
+    def __init__(
+        self,
+        hyper_parameters: Namespace
+        ):
+        super().__init__()
+        self.hp = hyper_parameters
+        
+        self.blocks = torch.nn.ModuleList([
+            FFT_Block(
+                channels= self.hp.Encoder.Size,
+                num_head= self.hp.Encoder.Phoneme_to_Note_Cross_Encoder.Head,
+                ffn_kernel_size= self.hp.Encoder.Phoneme_to_Note_Cross_Encoder.FFN.Kernel_Size,
+                ffn_dropout_rate= self.hp.Encoder.Phoneme_to_Note_Cross_Encoder.FFN.Dropout_Rate,
+                norm_type= Norm_Type.LayerNorm,
+                cross_attention_condition_channels= self.hp.Encoder.Size
+                )
+            for _ in range(self.hp.Encoder.Phoneme_to_Note_Cross_Encoder.Stack)
+            ])  # real type: torch.nn.ModuleList[FFT_BLock]
+
+    def forward(
+        self,
+        melody_encodings: torch.FloatTensor,
+        melody_lengths: torch.IntTensor,
+        lyric_encodings: torch.FloatTensor,
+        lyric_lengths: torch.IntTensor
+        ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+        '''
+        melody_encodings: [Batch, Enc_d, Dec_t]
+        melody_lengths: [Batch]
+        lyric_encodings: [Batch, Enc_d, Token_t]
+        lyric_lengths: [Batch]
+        '''
+        masks = None
+        float_masks = 1.0
+        if not melody_lengths is None:
+            masks = Mask_Generate(lengths= melody_lengths, max_length= torch.ones_like(melody_encodings[0, 0]).sum())    # [Batch, Time]
+            float_masks = (~masks)[:, None].float()   # float mask, [Batch, 1, X_t]
+
+        encodings = melody_encodings
+        
+        cross_alignments = []
+        for block in self.blocks:
+            cross_alignments.append(block.Get_Cross_Alignments(
+                x= encodings,
+                cross_attention_conditions= lyric_encodings,
+                cross_attention_condition_lengths= lyric_lengths,
+                average_attn_weights= False
+                ))
+            encodings = block(
+                x= encodings,
+                lengths= melody_lengths,
+                cross_attention_conditions= lyric_encodings,
+                cross_attention_condition_lengths= lyric_lengths
+                )
+        
+        encodings = encodings * float_masks
+        cross_alignments = torch.cat(cross_alignments, dim= 1).mean(dim= 1) # [Batch, Melody_d, Lyric_d]
+        
+        return encodings, cross_alignments
 
 class Prior_Encoder(torch.nn.Module):
     def __init__(

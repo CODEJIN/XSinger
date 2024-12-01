@@ -17,10 +17,9 @@ from typing import List
 
 from Modules.Modules import RectifiedFlowSVS, Mask_Generate, Length_Regulate
 from Datasets import Dataset, Inference_Dataset, Collater, Inference_Collater
-from Modules.Guided_Attention_Hard import Guided_Attention_Loss
-# from Modules.Guided_Attention_Soft import Guided_Attention_Loss
+# from Modules.Guided_Attention_Hard import Guided_Attention_Loss
+from Modules.Guided_Attention_Soft import Guided_Attention_Loss
 
-from meldataset import mel_spectrogram
 from Arg_Parser import Recursive_Parse, To_Non_Recursive_Dict
 
 import matplotlib as mpl
@@ -281,10 +280,10 @@ class Trainer:
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
             loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
                 alignments= cross_attention_alignments,
-                token_on_note_lengths= token_on_note_lengths,
-                note_durations = durations
-                # query_lengths= mel_lengths,
-                # key_lengths= token_lengths
+                # token_on_note_lengths= token_on_note_lengths,
+                # note_durations = durations
+                query_lengths= mel_lengths,
+                key_lengths= token_lengths
                 )
             loss_dict['Token'] = self.criterion_dict['TokenCTC'](
                 log_probs= prediction_tokens.permute(2, 0, 1),  # [Latent_t, Batch, Token_n]
@@ -306,8 +305,8 @@ class Trainer:
                     parameters= self.model_dict['RectifiedFlowSVS'].parameters(),
                     max_norm= self.hp.Train.Gradient_Norm
                     )
-                
-            self.optimizer_dict['RectifiedFlowSVS'].step()            
+
+            self.optimizer_dict['RectifiedFlowSVS'].step()
             if self.num_gpus > 1:
                 self.model_dict['RectifiedFlowSVS_EMA'].module.update_parameters(self.model_dict['RectifiedFlowSVS'])
             else:
@@ -418,10 +417,10 @@ class Trainer:
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
         loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
             alignments= cross_attention_alignments,
-            token_on_note_lengths= token_on_note_lengths,
-            note_durations = durations
-            # query_lengths= mel_lengths,
-            # key_lengths= token_lengths
+            # token_on_note_lengths= token_on_note_lengths,
+            # note_durations = durations
+            query_lengths= mel_lengths,
+            key_lengths= token_lengths
             )
         loss_dict['Token'] = self.criterion_dict['TokenCTC'](
             log_probs= prediction_tokens.permute(2, 0, 1),  # [Latent_t, Batch, Token_n]
@@ -481,7 +480,7 @@ class Trainer:
                 else:
                     inference_func = self.model_dict['RectifiedFlowSVS_EMA'].Inference
 
-                prediction_mels, cross_attention_alignments = inference_func(
+                prediction_mels, cross_attention_alignments, temp_mels = inference_func(
                     tokens= tokens[index, None],
                     languages= languages[index, None],
                     token_lengths= token_lengths[index, None],
@@ -514,10 +513,14 @@ class Trainer:
                 'Mel/Prediction': (prediction_mel, None, 'auto', None, None, None),
                 'Alignment/Score_Alignment': (score_alignment, None, 'auto', None, None, None),
                 'Alignment/Cross_Alignment': (cross_attention_alignment, None, 'auto', None, None, None),
+
+                'Mel/Temp': (temp_mels[0, :, :mel_length].cpu().numpy(), None, 'auto', None, None, None),
                 }
             audio_dict = {
                 'Audio/Target': (target_audio, self.hp.Sound.Sample_Rate),
                 'Audio/Linear': (prediction_audio, self.hp.Sound.Sample_Rate),
+
+                'Audio/Temp': (self.vocoder(temp_mels[0:1, :, :mel_length])[0].float().clamp(-1.0, 1.0).cpu().numpy(), self.hp.Sound.Sample_Rate),
                 }
 
             self.writer_dict['Evaluation'].add_image_dict(image_dict, self.steps)
@@ -580,7 +583,7 @@ class Trainer:
         else:
             inference_func = self.model_dict['RectifiedFlowSVS_EMA'].Inference
 
-        prediction_mels, cross_attention_alignments = inference_func(
+        prediction_mels, cross_attention_alignments, _ = inference_func(
             tokens= tokens,
             languages= languages,
             token_lengths= token_lengths,

@@ -36,9 +36,13 @@ Encoder:
         FFN:
             Kernel_Size: 7
             Dropout_Rate: 0.1
-    Cross_Attention:
+    Phoneme_to_Note_Cross_Encoder:
+        Stack: 2
         Head: 2
-        Attention_Prior_Extra_Width_Factor: 2
+        Dropout_Rate: 0.1
+        FFN:
+            Kernel_Size: 7
+            Dropout_Rate: 0.1
     Prior_Encoder:
         Stack: 4
         Head: 2
@@ -82,7 +86,7 @@ Train:
         Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Eval'
         Metadata_File: 'METADATA.PICKLE'
         Accumulated_Dataset_Epoch: 4   # When singer is 1, evaluation pattern is also 1. Because offset is selected randomly, this is meaningful.
-    Num_Workers: 4
+    Num_Workers: 8
     Batch_Size: 32
     Pattern_Length:
         Min: 384
@@ -100,7 +104,7 @@ Train:
         Epsilon: 1.0e-7
     Weight_Decay: 1.0e-6
     Accumulated_Gradient_Step: 1 # 25    
-    Gradient_Norm: 1.0
+    Gradient_Norm: 0.0
     Max_Step: 1000000
     Checkpoint_Save_Interval: 10000
     Logging_Interval: 1
