@@ -46,23 +46,34 @@ class Inferencer:
         self.model.Inference = self.model.module.Inference
         self.accelerator.prepare(self.model)
 
+        self.vocoder = torch.jit.load('BigVGAN_24K_100band_256x.pts', map_location= 'cpu').to(self.device)
+
         self.Load_Checkpoint(checkpoint_path)
         self.batch_size = batch_size
 
     def Dataset_Generate(
         self,
-        texts: List[str],
+        lyrics: List[List[str]],
+        notes: List[List[int]],
+        durations: List[List[float]],
+        singers: List[str],
         languages: List[str],
         ):
         token_dict = yaml.load(open(self.hp.Token_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
+        singer_dict = yaml.load(open(self.hp.Singer_Info_Path, 'r', encoding= 'utf-8-sig'), Loader=yaml.Loader)        
         language_dict = yaml.load(open(self.hp.Language_Info_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
 
         dataset = Dataset(
             token_dict= token_dict,
+            singer_dict = singer_dict,
             language_dict= language_dict,
-            use_between_padding= self.hp.Use_Between_Padding,
-            texts= texts,
+            lyrics= lyrics,
+            notes= notes,
+            durations= durations,
+            singers= singers,
             languages= languages,
+            sample_rate= self.hp.Sound.Sample_Rate,
+            hop_size= self.hp.Sound.Hop_Size,
             )
         collater = Collater(
             token_dict= token_dict
@@ -88,39 +99,52 @@ class Inferencer:
         self,
         tokens: torch.IntTensor,
         token_lengths: torch.IntTensor,
-        languages: torch.IntTensor
+        token_on_note_lengths: torch.IntTensor,
+        notes: torch.IntTensor,
+        durations: torch.IntTensor,
+        note_lengths: torch.IntTensor,
+        singers: torch.IntTensor,
+        languages: torch.IntTensor,
+        mel_lengths: torch.IntTensor
         ):
-        prediction_audios, _, prediction_alignments = self.model.Inference(
-            tokens= tokens.to(self.device),
-            token_lengths= token_lengths.to(self.device),
-            languages= languages.to(self.device),
+        prediction_mels, _, _ = self.model.Inference(
+            tokens= tokens,
+            languages= languages,
+            token_lengths= token_lengths,
+            token_on_note_lengths= token_on_note_lengths,
+            notes= notes,
+            durations= durations,
+            note_lengths= note_lengths,
+            singers= singers,
+            mel_lengths= mel_lengths
             )
         
-        latent_code_lengths = [
-            alignment[:token_length, :].sum().long().item()
-            for token_length, alignment in zip(token_lengths, prediction_alignments)
-            ]
         audio_lengths = [
             length * self.hp.Sound.Hop_Size
-            for length in latent_code_lengths
+            for length in mel_lengths
             ]
-
         prediction_audios = [
             audio[:length]
-            for audio, length in zip(prediction_audios.clamp(-1.0, 1.0).cpu().numpy(), audio_lengths)
+            for audio, length in zip(self.vocoder(prediction_mels).cpu().numpy(), audio_lengths)
             ]
 
         return prediction_audios
 
     def Inference_Epoch(
         self,
-        texts: List[str],
+        lyrics: List[List[str]],
+        notes: List[List[int]],
+        durations: List[List[float]],
+        singers: List[str],
         languages: List[str],
         use_tqdm= True
         ):
         dataloader = self.Dataset_Generate(
-            texts= texts,
-            languages= languages
+            lyrics= lyrics,
+            notes= notes,
+            durations= durations,
+            singers= singers,
+            languages= languages,
             )
         if use_tqdm:
             dataloader = tqdm(
@@ -129,8 +153,21 @@ class Inferencer:
                 total= math.ceil(len(dataloader.dataset) / self.batch_size)
                 )
         audios = []
-        for tokens, token_lengths, languages, _, _ in dataloader:
-            audios.extend(self.Inference_Step(tokens, token_lengths, languages))
+        for tokens, token_lengths, token_on_note_lengths, \
+            notes, durations, note_lengths, \
+            singers, languages, \
+            mel_lengths, lyrics in dataloader:
+            audios.extend(self.Inference_Step(
+                tokens= tokens,
+                token_lengths= token_lengths,
+                token_on_note_lengths= token_on_note_lengths,
+                notes= notes, 
+                durations= durations,
+                note_lengths= note_lengths,
+                singers= singers,
+                languages= languages,
+                mel_lengths= mel_lengths,
+                ))
         
         return audios
     
@@ -142,20 +179,21 @@ if __name__ == '__main__':
         )
     
     audios = inferencer.Inference_Epoch(
-        texts= [
-            'Printing, in the only sense with which we are at present concerned, differs from most if not from all the arts and crafts represented in the Exhibition',
-            'Do not kill the goose that lays the golden eggs.',
-            'A good medicine tastes bitter.',
-            'Do not count your chickens before they hatch.',
-            'If you laugh, blessings will come your way.'
+        lyrics= [
+            ['마','음','울','적','한','날','에','<X>','거','리','를','걸','어','보','고','향','기','로','운','칵','테','일','에','취','해','도','보','고','한','편','의','시','가','있','는','<X>','전','시','회','장','도','가','고','밤','새','도','<X>','록','그','리','움','에','편','질','쓰','고','파',],
+            ],
+        notes= [
+            [68,68,68,75,73,72,70,0,72,72,72,73,72,67,67,65,65,65,68,68,66,65,63,65,68,67,68,70,68,68,68,75,73,72,70,0,72,72,72,73,72,67,67,65,65,65,67,68,68,65,63,63,65,68,67,70,68],
+            ],
+        durations= [
+            [0.33,0.16,0.33,0.49,0.33,0.16,0.81,0.33,0.16,0.16,0.33,0.16,0.49,0.16,0.82,0.33,0.16,0.33,0.49,0.33,0.16,0.33,0.49,0.33,0.33,0.16,0.33,1.47,0.33,0.16,0.33,0.49,0.33,0.16,0.81,0.33,0.16,0.16,0.33,0.16,0.49,0.16,0.82,0.33,0.16,0.33,0.16,0.33,0.49,0.16,0.33,0.33,0.33,0.33,0.16,0.33,0.82],
+            ],
+        singers= [
+            'CSD',
             ],
         languages= [
-            'English',
-            'English',
-            'English',
-            'English',
-            'English'
-            ]
+            'Korean',
+            ],
         )
     
     from scipy.io import wavfile

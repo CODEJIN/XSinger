@@ -417,7 +417,7 @@ class Phoneme_to_Note_Cross_Encoder(torch.nn.Module):
         
         encodings = encodings * float_masks
         cross_alignments = torch.cat(cross_alignments, dim= 1).mean(dim= 1) # [Batch, Melody_d, Lyric_d]
-        
+
         return encodings, cross_alignments
 
 class Prior_Encoder(torch.nn.Module):
