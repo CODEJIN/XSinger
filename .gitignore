@@ -16,3 +16,4 @@ note_fix/
 Train_.py
 temp*.py
 BigVGAN_24K_100band_256x.pts
+Quality_Check/

@@ -42,7 +42,14 @@ class Inferencer:
             gradient_accumulation_steps= self.hp.Train.Accumulated_Gradient_Step
             )
 
-        self.model = torch.optim.swa_utils.AveragedModel(RectifiedFlowSVS(self.hp).to(self.device))
+        mel_dict = yaml.load(open(self.hp.Mel_Info_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
+        mel_min, mel_max = zip(*[(x['Min'], x['Max']) for x in mel_dict.values()])
+        mel_min, mel_max = min(mel_min), max(mel_max)
+        self.model = torch.optim.swa_utils.AveragedModel(RectifiedFlowSVS(
+            hyper_parameters= self.hp,
+            mel_min= mel_min,
+            mel_max= mel_max
+            ).to(self.device))
         self.model.Inference = self.model.module.Inference
         self.accelerator.prepare(self.model)
 
@@ -60,7 +67,7 @@ class Inferencer:
         languages: List[str],
         ):
         token_dict = yaml.load(open(self.hp.Token_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
-        singer_dict = yaml.load(open(self.hp.Singer_Info_Path, 'r', encoding= 'utf-8-sig'), Loader=yaml.Loader)        
+        singer_dict = yaml.load(open(self.hp.Singer_Info_Path, 'r', encoding= 'utf-8-sig'), Loader=yaml.Loader)
         language_dict = yaml.load(open(self.hp.Language_Info_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
 
         dataset = Dataset(
@@ -108,15 +115,15 @@ class Inferencer:
         mel_lengths: torch.IntTensor
         ):
         prediction_mels, _, _ = self.model.Inference(
-            tokens= tokens,
-            languages= languages,
-            token_lengths= token_lengths,
-            token_on_note_lengths= token_on_note_lengths,
-            notes= notes,
-            durations= durations,
-            note_lengths= note_lengths,
-            singers= singers,
-            mel_lengths= mel_lengths
+            tokens= tokens.to(self.device),
+            languages= languages.to(self.device),
+            token_lengths= token_lengths.to(self.device),
+            token_on_note_lengths= token_on_note_lengths.to(self.device),
+            notes= notes.to(self.device),
+            durations= durations.to(self.device),
+            note_lengths= note_lengths.to(self.device),
+            singers= singers.to(self.device),
+            mel_lengths= mel_lengths.to(self.device)
             )
         
         audio_lengths = [
