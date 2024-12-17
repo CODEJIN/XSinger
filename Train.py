@@ -17,8 +17,8 @@ from typing import List
 
 from Modules.Modules import RectifiedFlowSVS, Mask_Generate, Length_Regulate
 from Datasets import Dataset, Inference_Dataset, Collater, Inference_Collater
-# from Modules.Guided_Attention_Hard import Guided_Attention_Loss
-from Modules.Guided_Attention_Soft import Guided_Attention_Loss
+from Modules.Guided_Attention_Hard import Guided_Attention_Loss
+# from Modules.Guided_Attention_Soft import Guided_Attention_Loss
 
 from Arg_Parser import Recursive_Parse, To_Non_Recursive_Dict
 
@@ -280,10 +280,10 @@ class Trainer:
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
             loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
                 alignments= cross_attention_alignments,
-                # token_on_note_lengths= token_on_note_lengths,
-                # note_durations = durations
-                query_lengths= mel_lengths,
-                key_lengths= token_lengths
+                token_on_note_lengths= token_on_note_lengths,
+                note_durations = durations
+                # query_lengths= mel_lengths,
+                # key_lengths= token_lengths
                 )
             loss_dict['Token'] = self.criterion_dict['TokenCTC'](
                 log_probs= prediction_tokens.permute(2, 0, 1),  # [Latent_t, Batch, Token_n]
@@ -417,10 +417,10 @@ class Trainer:
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
         loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
             alignments= cross_attention_alignments,
-            # token_on_note_lengths= token_on_note_lengths,
-            # note_durations = durations
-            query_lengths= mel_lengths,
-            key_lengths= token_lengths
+            token_on_note_lengths= token_on_note_lengths,
+            note_durations = durations
+            # query_lengths= mel_lengths,
+            # key_lengths= token_lengths
             )
         loss_dict['Token'] = self.criterion_dict['TokenCTC'](
             log_probs= prediction_tokens.permute(2, 0, 1),  # [Latent_t, Batch, Token_n]

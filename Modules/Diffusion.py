@@ -127,7 +127,7 @@ class Network(torch.nn.Module):
         
         self.encoding_ffn = torch.nn.Sequential(
             Conv_Init(torch.nn.Conv1d(
-                in_channels= self.hp.Encoder.Size,
+                in_channels= self.hp.Sound.N_Mel, # linear prediction mels inserted.
                 out_channels= self.hp.Diffusion.Size * 4,
                 kernel_size= 1,
                 ), w_init_gain= 'gelu'),
@@ -156,7 +156,7 @@ class Network(torch.nn.Module):
         self.step_ffn = torch.nn.Sequential(
             Step_Embedding(
                 embedding_dim= self.hp.Diffusion.Size
-                ),            
+                ),
             Conv_Init(torch.nn.Linear(
                 in_features= self.hp.Diffusion.Size,
                 out_features= self.hp.Diffusion.Size * 4,

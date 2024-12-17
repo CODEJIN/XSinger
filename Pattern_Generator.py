@@ -1697,8 +1697,13 @@ def Chinese_G2P_Lyric(music):
         ipa_index += 1
 
     music = [
-        (duration, syllable, note)
-        for (duration, _, note), syllable in zip(music, ipa_slur)
+        (
+            duration,
+            syllable[0] + [syllable[1]] + syllable[2] if syllable != '<X>' else ['<X>'],
+            note,
+            lyric
+            )
+        for (duration, lyric, note), syllable in zip(music, ipa_slur)
         ]
     
     return music

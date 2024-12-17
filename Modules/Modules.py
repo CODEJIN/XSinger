@@ -56,10 +56,10 @@ class RectifiedFlowSVS(torch.nn.Module):
             mel_lengths= mel_lengths
             )    # [Batch, Enc_d, Dec_t], [Batch, Enc_d, Dec_t], [Batch, Dec_t, Token_t]
         
-        prediction_mels = self.linear_projection(encodings)
+        linear_prediction_mels = self.linear_projection(encodings)
 
         flows, prediction_flows, _, _ = self.diffusion(
-            encodings= encodings,
+            encodings= linear_prediction_mels,
             singers= singers,
             mels= mels,
             lengths= mel_lengths,
@@ -67,7 +67,7 @@ class RectifiedFlowSVS(torch.nn.Module):
 
         prediction_tokens = self.token_predictor(encodings)
 
-        return flows, prediction_flows, prediction_mels, cross_attention_alignments, prediction_tokens
+        return flows, prediction_flows, linear_prediction_mels, cross_attention_alignments, prediction_tokens
     
     def Inference(
         self,
@@ -93,19 +93,18 @@ class RectifiedFlowSVS(torch.nn.Module):
             singers= singers,
             mel_lengths= mel_lengths
             )    # [Batch, Enc_d, Enc_t], [Batch, Enc_d, Dec_t]
+        
+        linear_prediction_mels = self.linear_projection(encodings)
 
         mels = self.diffusion.Inference(
-            encodings= encodings,
+            encodings= linear_prediction_mels,
             singers= singers,
             lengths= mel_lengths,
             steps= diffusion_steps,
             )
         mels = (mels + 1.0) / 2.0 * (self.mel_max - self.mel_min) + self.mel_min
 
-        temp_mels = self.linear_projection(encodings)
-
-
-        return mels, cross_attention_alignments, temp_mels
+        return mels, cross_attention_alignments, linear_prediction_mels
 
 class Encoder(torch.nn.Module):
     def __init__(
