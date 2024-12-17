@@ -252,7 +252,7 @@ class Trainer:
         ):
         loss_dict = {}
         with self.accelerator.accumulate(self.model_dict['RectifiedFlowSVS']):
-            flows, prediction_flows, prediction_mels, cross_attention_alignments, prediction_tokens = self.model_dict['RectifiedFlowSVS'](
+            flows, prediction_flows, target_mels, prediction_mels, cross_attention_alignments, prediction_tokens = self.model_dict['RectifiedFlowSVS'](
                 tokens= tokens,
                 languages= languages,
                 token_lengths= token_lengths,
@@ -276,7 +276,7 @@ class Trainer:
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_flows.size(1)
             loss_dict['Linear'] = (self.criterion_dict['MSE'](
                 prediction_mels,
-                mels,
+                target_mels,
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
             loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
                 alignments= cross_attention_alignments,
@@ -389,7 +389,7 @@ class Trainer:
         mel_lengths: torch.IntTensor,
         ):
         loss_dict = {}
-        flows, prediction_flows, prediction_mels, cross_attention_alignments, prediction_tokens = self.model_dict['RectifiedFlowSVS'](
+        flows, prediction_flows, target_mels, prediction_mels, cross_attention_alignments, prediction_tokens = self.model_dict['RectifiedFlowSVS'](
             tokens= tokens,
             languages= languages,
             token_lengths= token_lengths,
@@ -413,7 +413,7 @@ class Trainer:
             ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_flows.size(1)
         loss_dict['Linear'] = (self.criterion_dict['MSE'](
                 prediction_mels,
-                mels,
+                target_mels,
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
         loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
             alignments= cross_attention_alignments,

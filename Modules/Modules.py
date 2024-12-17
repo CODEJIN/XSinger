@@ -42,7 +42,7 @@ class RectifiedFlowSVS(torch.nn.Module):
         mels: torch.FloatTensor,
         mel_lengths: torch.IntTensor,
         ):
-        mels = (mels - self.mel_min) / (self.mel_max - self.mel_min) * 2.0 - 1.0
+        target_mels = (mels - self.mel_min) / (self.mel_max - self.mel_min) * 2.0 - 1.0
 
         encodings, singers, cross_attention_alignments = self.encoder(
             tokens= tokens,
@@ -61,13 +61,13 @@ class RectifiedFlowSVS(torch.nn.Module):
         flows, prediction_flows, _, _ = self.diffusion(
             encodings= linear_prediction_mels,
             singers= singers,
-            mels= mels,
+            mels= target_mels,
             lengths= mel_lengths,
             )
 
         prediction_tokens = self.token_predictor(encodings)
 
-        return flows, prediction_flows, linear_prediction_mels, cross_attention_alignments, prediction_tokens
+        return flows, prediction_flows, target_mels, linear_prediction_mels, cross_attention_alignments, prediction_tokens
     
     def Inference(
         self,
