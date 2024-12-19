@@ -57,7 +57,7 @@ class Trainer:
             split_batches= True,
             mixed_precision= 'fp16' if self.hp.Use_Mixed_Precision else 'no',   # no, fp16, bf16, fp8
             gradient_accumulation_steps= self.hp.Train.Accumulated_Gradient_Step,
-            kwargs_handlers= [DistributedDataParallelKwargs(find_unused_parameters= True), ]
+            # kwargs_handlers= [DistributedDataParallelKwargs(find_unused_parameters= True), ]
             )
 
         if not torch.cuda.is_available():
@@ -270,11 +270,11 @@ class Trainer:
                 max_length= mels.size(2)
                 ).to(mels.device)).float()
             
-            loss_dict['Diffusion'] = (self.criterion_dict['MSE'](
+            loss_dict['CFM'] = (self.criterion_dict['MSE'](
                 prediction_flows,
                 flows,
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_flows.size(1)
-            loss_dict['Linear'] = (self.criterion_dict['MSE'](
+            loss_dict['Encoding'] = (self.criterion_dict['MSE'](
                 prediction_mels,
                 target_mels,
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
@@ -294,8 +294,8 @@ class Trainer:
             
             self.optimizer_dict['RectifiedFlowSVS'].zero_grad()
             self.accelerator.backward(
-                loss_dict['Diffusion'] +
-                loss_dict['Linear'] +
+                loss_dict['CFM'] +
+                loss_dict['Encoding'] +
                 loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention +
                 loss_dict['Token']
                 )
@@ -407,11 +407,11 @@ class Trainer:
             max_length= mels.size(2)
             ).to(mels.device)).float()
         
-        loss_dict['Diffusion'] = (self.criterion_dict['MSE'](
+        loss_dict['CFM'] = (self.criterion_dict['MSE'](
             prediction_flows,
             flows,
             ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_flows.size(1)
-        loss_dict['Linear'] = (self.criterion_dict['MSE'](
+        loss_dict['Encoding'] = (self.criterion_dict['MSE'](
                 prediction_mels,
                 target_mels,
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
@@ -464,6 +464,7 @@ class Trainer:
                 mel_lengths= mel_lengths,
                 )
 
+        self.accelerator.wait_for_everyone()
         if self.accelerator.is_main_process:
             self.scalar_dict['Evaluation'] = {
                 tag: loss / step
@@ -480,7 +481,7 @@ class Trainer:
                 else:
                     inference_func = self.model_dict['RectifiedFlowSVS_EMA'].Inference
 
-                prediction_mels, cross_attention_alignments, temp_mels = inference_func(
+                prediction_mels, cross_attention_alignments, encoding_mels = inference_func(
                     tokens= tokens[index, None],
                     languages= languages[index, None],
                     token_lengths= token_lengths[index, None],
@@ -514,13 +515,13 @@ class Trainer:
                 'Alignment/Score_Alignment': (score_alignment, None, 'auto', None, None, None),
                 'Alignment/Cross_Alignment': (cross_attention_alignment, None, 'auto', None, None, None),
 
-                'Mel/Temp': (temp_mels[0, :, :mel_length].cpu().numpy(), None, 'auto', None, None, None),
+                'Mel/Encoding': (encoding_mels[0, :, :mel_length].cpu().numpy(), None, 'auto', None, None, None),
                 }
             audio_dict = {
                 'Audio/Target': (target_audio, self.hp.Sound.Sample_Rate),
-                'Audio/Linear': (prediction_audio, self.hp.Sound.Sample_Rate),
+                'Audio/CFM': (prediction_audio, self.hp.Sound.Sample_Rate),
 
-                'Audio/Temp': (self.vocoder(temp_mels[0:1, :, :mel_length])[0].float().clamp(-1.0, 1.0).cpu().numpy(), self.hp.Sound.Sample_Rate),
+                'Audio/Encoding': (self.vocoder(encoding_mels[0:1, :, :mel_length])[0].float().clamp(-1.0, 1.0).cpu().numpy(), self.hp.Sound.Sample_Rate),
                 }
 
             self.writer_dict['Evaluation'].add_image_dict(image_dict, self.steps)
@@ -666,6 +667,8 @@ class Trainer:
                 )
             
     def Inference_Epoch(self):
+        self.accelerator.wait_for_everyone()
+        torch.cuda.empty_cache()
         logging.info('(Steps: {}) Start inference.'.format(self.steps))
 
         for model in self.model_dict.values():
@@ -703,6 +706,8 @@ class Trainer:
 
         for model in self.model_dict.values():
             model.train()
+
+        torch.cuda.empty_cache()
 
     def Load_Checkpoint(self):
         if not os.path.exists(self.hp.Checkpoint_Path):

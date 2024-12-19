@@ -4,7 +4,7 @@ import math
 from typing import Union, List, Optional, Tuple
 
 from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Norm_Type
-from .Diffusion import Diffusion
+from .CFM import CFM
 
 class RectifiedFlowSVS(torch.nn.Module):
     def __init__(
@@ -25,7 +25,7 @@ class RectifiedFlowSVS(torch.nn.Module):
             kernel_size= 1
             ), w_init_gain= 'linear')
 
-        self.diffusion = Diffusion(self.hp)
+        self.cfm = CFM(self.hp)
 
         self.token_predictor = Token_Predictor(self.hp)
 
@@ -58,7 +58,7 @@ class RectifiedFlowSVS(torch.nn.Module):
         
         linear_prediction_mels = self.linear_projection(encodings)
 
-        flows, prediction_flows, _, _ = self.diffusion(
+        flows, prediction_flows, _, _ = self.cfm(
             encodings= linear_prediction_mels,
             singers= singers,
             mels= target_mels,
@@ -80,7 +80,7 @@ class RectifiedFlowSVS(torch.nn.Module):
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         mel_lengths: torch.IntTensor,
-        diffusion_steps: int= 16
+        cfm_steps: int= 16
         ):
         encodings, singers, cross_attention_alignments = self.encoder(
             tokens= tokens,
@@ -96,13 +96,15 @@ class RectifiedFlowSVS(torch.nn.Module):
         
         linear_prediction_mels = self.linear_projection(encodings)
 
-        mels = self.diffusion.Inference(
+        mels = self.cfm.Inference(
             encodings= linear_prediction_mels,
             singers= singers,
             lengths= mel_lengths,
-            steps= diffusion_steps,
+            steps= cfm_steps,
             )
+        
         mels = (mels + 1.0) / 2.0 * (self.mel_max - self.mel_min) + self.mel_min
+        linear_prediction_mels = (linear_prediction_mels + 1.0) / 2.0 * (self.mel_max - self.mel_min) + self.mel_min
 
         return mels, cross_attention_alignments, linear_prediction_mels
 
@@ -188,7 +190,7 @@ class Encoder(torch.nn.Module):
             lengths= mel_lengths
             )   # [Batch, Enc_d, Dec_t]
   
-        return encodings, singers, cross_attention_alignments   # singer: using in diffusion.
+        return encodings, singers, cross_attention_alignments   # singer: using in cfm as a condition.
 
 class Lyric_Encoder(torch.nn.Module):
     def __init__(

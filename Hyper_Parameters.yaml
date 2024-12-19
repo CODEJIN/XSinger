@@ -57,7 +57,7 @@ Token_Predictor:
         Stack: 2
         Dropout_Rate: 0.0
 
-Diffusion:
+CFM:
     Size: 512
     Transformer:
         Stack: 6
