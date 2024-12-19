@@ -183,213 +183,6 @@ def AIHub_Mediazen(
         
         is_eval_generated = is_eval_generated or is_generated
 
-def CSD_Fix(
-    hyper_paramters: Namespace,
-    dataset_path: str,
-    verbose: bool= False
-    ):
-    paths = []
-    for root, _, files in os.walk(os.path.join(dataset_path, 'wav').replace('\\', '/')):
-        for file in sorted(files):
-            if os.path.splitext(file)[1] != '.wav':
-                continue
-            wav_path = os.path.join(root, file).replace('\\', '/')
-            midi_path = wav_path.replace('wav', 'mid')
-            
-            if not os.path.exists(midi_path):
-                raise FileExistsError(midi_path)
-
-            paths.append((wav_path, midi_path))
-
-    for index, (wav_path, midi_path) in tqdm(
-        enumerate(paths),
-        total= len(paths),
-        desc= 'CSD_Fix'
-        ):
-        music_label = os.path.splitext(os.path.basename(wav_path))[0]
-        pattern_path = os.path.join(
-            hyper_paramters.Train.Train_Pattern.Path if not index == (len(paths) - 1) else hyper_paramters.Train.Eval_Pattern.Path,
-            'CSD',
-            'CSD',
-            f'{music_label}.pickle'
-            ).replace('\\', '/')
-        if os.path.exists(pattern_path) or os.path.exists(os.path.join(f'./note_error/CSD/CSD/{music_label}.png')):
-            continue
-
-        mid = mido.MidiFile(midi_path, charset='CP949')
-
-        music = []
-        note_states = {}
-        last_note = None
-
-        # Note on 쉼표
-        # From Lyric to message before note on: real note        
-        for message in list(mid):
-            if message.type == 'note_on' and message.velocity != 0:                
-                if len(note_states) == 0:
-                    if message.time < 0.1:
-                        music[-1][0] += message.time
-                    else:
-                        music.append([message.time, '<X>', 0])
-                else:
-                    note_states[last_note]['Time'] += message.time
-                note_states[message.note] = {
-                    'Lyric': None,
-                    'Time': 0.0
-                    }
-                last_note = message.note                
-            elif message.type == 'lyrics':
-                if message.text == '\r':    # If there is a bug in lyric                    
-                    if verbose:
-                        logging.warning(wav_path, midi_path)
-                    continue
-                note_states[last_note]['Lyric'] = message.text.strip()
-                note_states[last_note]['Time'] += message.time
-            elif message.type == 'note_off' or (message.type == 'note_on' and message.velocity == 0):
-                note_states[message.note]['Time'] += message.time
-                music.append([note_states[message.note]['Time'], note_states[message.note]['Lyric'], message.note])
-                del note_states[message.note]
-                last_note = None
-            else:
-                if len(note_states) == 0:
-                    music.append([message.time, '<X>', 0])
-                else:
-                    note_states[last_note]['Time'] += message.time
-        if len(note_states) > 0:
-            logging.critical(wav_path, midi_path)
-            logging.critical(note_states)
-            assert False
-        music = [x for x in music if x[0] > 0.0]
-
-        audio, _ = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)
-        
-        initial_audio_length = audio.shape[0]
-        while True:
-            if music[0][1] in [None, '', '<X>', 'J']:
-                audio = audio[int(music[0][0] * hyper_paramters.Sound.Sample_Rate):]
-                music = music[1:]
-            else:
-                break
-        while True:
-            if music[-1][1] in [None, '', '<X>', 'H']:
-                music = music[:-1]
-            else:
-                break
-        audio = audio[:int(sum([x[0] for x in music]) * hyper_paramters.Sound.Sample_Rate)]    # remove last silence
-        
-        # This is to avoid to use wrong data.
-        if initial_audio_length * 0.5 > audio.shape[0]:
-            continue
-
-        audio = librosa.util.normalize(audio) * 0.95
-        music = Korean_G2P_Lyric(music)
-        if music is None:
-            continue
-        
-        music = Convert_Feature_Based_Duration(
-            music= music,
-            sample_rate= hyper_paramters.Sound.Sample_Rate,
-            hop_size= hyper_paramters.Sound.Hop_Size
-            )
-
-        Pattern_File_Generate(
-            music= music,
-            audio= audio,
-            music_label= music_label,
-            singer= 'CSD',
-            genre= 'Children',
-            language= 'Korean',
-            dataset= 'CSD',
-            is_eval_music= index == (len(paths) - 1),
-            hyper_paramters= hyper_paramters,
-            verbose= verbose
-            )
-
-def CSD_Eng_Fix(
-    hyper_paramters: Namespace,
-    dataset_path: str,
-    verbose: bool= False
-    ):
-    paths = []
-    for root, _, files in os.walk(os.path.join(dataset_path, 'wav').replace('\\', '/')):
-        for file in sorted(files):
-            if os.path.splitext(file)[1] != '.wav':
-                continue
-            wav_path = os.path.join(root, file).replace('\\', '/')
-            midi_path = wav_path.replace('wav', 'csv')
-            lyric_path = wav_path.replace('wav/', 'ipa/').replace('.wav', '.txt')
-            
-            if not os.path.exists(midi_path):
-                raise FileExistsError(midi_path)
-            elif not os.path.exists(lyric_path):
-                raise FileExistsError(lyric_path)
-
-            paths.append((wav_path, midi_path, lyric_path))
-
-    paths = sorted(paths, key= lambda x: x[0])
-
-    for index, (wav_path, midi_path, lyric_path) in tqdm(
-        enumerate(paths),
-        total= len(paths),
-        desc= 'CSD_Eng'
-        ):
-        music_label = os.path.splitext(os.path.basename(wav_path))[0]
-        pattern_path = os.path.join(
-            hyper_paramters.Train.Train_Pattern.Path if not index == (len(paths) - 1) else hyper_paramters.Train.Eval_Pattern.Path,
-            'CSD',
-            'CSD',
-            f'{music_label}.pickle'
-            ).replace('\\', '/')
-        if os.path.exists(pattern_path) or os.path.exists(os.path.join(f'./note_error/CSD/CSD/{music_label}.png')):
-            continue
-
-        midi_df = pd.read_csv(midi_path)
-        lyrics = [
-            line.strip().split('\t')[0]
-            for line in open(lyric_path, 'r', encoding= 'utf-8-sig').readlines()
-            ]   # deque is better, but I don't use.
-        assert len(lyrics) == len(midi_df), f'There is a lyric data has a problem in: \'{lyric_path}\', lyric length: {len(lyrics)}, midi length: {len(midi_df)}'
-        midi_df['syllable'] = lyrics
-
-        music = []
-        last_end_time = 0.0
-        for _, row in midi_df.iterrows():
-            if last_end_time < row['start']:
-                music.append((row['start'] - last_end_time, '<X>', 0))
-            elif last_end_time > row['start']:
-                row['start'] = last_end_time
-
-            music.append((row['end'] - row['start'], row['syllable'], row['pitch']))
-            last_end_time = row['end']
-
-        music = English_Phoneme_Split(music)
-        music = Convert_Feature_Based_Duration(
-            music= music,
-            sample_rate= hyper_paramters.Sound.Sample_Rate,
-            hop_size= hyper_paramters.Sound.Hop_Size
-            )
-        
-        audio, _ = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)        
-        audio = audio[:int(sum([x[0] for x in music]) * hyper_paramters.Sound.Sample_Rate)]
-        music_length = sum([x[0] for x in music]) * hyper_paramters.Sound.Hop_Size
-        audio_length = audio.shape[0]
-        if music_length < audio_length:
-            audio = audio[:music_length]
-        audio = librosa.util.normalize(audio) * 0.95
-        
-        Pattern_File_Generate(
-            music= music,
-            audio= audio,
-            music_label= music_label,
-            singer= 'CSD',
-            genre= 'Children',
-            language= 'English',
-            dataset= 'CSD',
-            is_eval_music= index == (len(paths) - 1),
-            hyper_paramters= hyper_paramters,
-            verbose= verbose
-            )
-
 def M4Singer(
     hyper_paramters: Namespace,
     dataset_path: str,
@@ -839,104 +632,6 @@ def M4Singer(
             verbose= verbose
             )
         is_eval_generated = is_eval_generated or is_generated
-
-def NUS48E(
-    hyper_paramters: Namespace,
-    dataset_path: str,
-    verbose: bool= False
-    ):
-    music_label_dict = {
-        1: 'Edelweiss',
-        2: 'Do_Re_Mi',
-        3: 'Jingle_Bells',
-        4: 'Silent_Night',
-        5: 'Wonderful_Tonight',
-        6: 'Moon_River',
-        7: 'Rhythm_of_the_Rain',
-        8: 'I_Have_a_Dream',
-        9: 'Love_Me_Tender',
-        10: 'Twinkle_Twinkle_Little_Star',
-        11: 'You_Are_My_Sunshine',
-        12: 'A_Little_Love',
-        13: 'Proud_of_You',
-        14: 'Lemon_Tree',
-        15: 'Can_You_Feel_the_Love_Tonight',
-        16: 'Far_Away_from_Home',
-        17: 'Seasons_in_the_Sun',
-        18: 'The_Show',
-        19: 'The_Rose',
-        20: 'Right_Here_Waiting',
-        }
-    
-    paths = []
-    for root, _, files in os.walk(os.path.join(dataset_path, 'wav').replace('\\', '/')):
-        for file in sorted(files):
-            if os.path.splitext(file)[1] != '.wav':
-                continue
-            wav_path = os.path.join(root, file).replace('\\', '/')
-            data_path = wav_path.replace('wav/', 'Data/').replace('.wav', '.pickle')
-            
-            
-            if not os.path.exists(data_path):
-                raise FileExistsError(data_path)
-
-            paths.append((wav_path, data_path))
-
-    paths = sorted(paths, key= lambda x: x[0])
-
-    for index, (wav_path, data_path) in tqdm(
-        enumerate(paths),
-        total= len(paths),
-        desc= 'NUS48E'
-        ):
-        singer, music_label = os.path.splitext(os.path.basename(wav_path))[0].split('_')
-        music_label = music_label_dict[int(music_label)]
-        pattern_path = os.path.join(
-            hyper_paramters.Train.Train_Pattern.Path if not index == (len(paths) - 1) else hyper_paramters.Train.Eval_Pattern.Path,
-            'NUS48E',
-            singer,
-            f'{music_label}.pickle'
-            ).replace('\\', '/')
-        if os.path.exists(pattern_path) or os.path.exists(os.path.join(f'./note_error/NUS48E/{singer}/{music_label}.png')):
-            continue
-
-        musics = pickle.load(open(data_path, 'rb'))
-        musics = [
-            (
-                end - start,
-                [lyric] if lyric == '<X>' else lyric[0] + [lyric[1]] + lyric[2],
-                note,
-                lyric if lyric == '<X>' else ''.join(lyric[0] + [lyric[1]] + lyric[2])
-                )
-            for start, end, note, lyric in musics
-            ]
-
-        musics = Convert_Feature_Based_Duration(
-            music= musics,
-            sample_rate= hyper_paramters.Sound.Sample_Rate,
-            hop_size= hyper_paramters.Sound.Hop_Size
-            )
-        
-        audio, _ = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)
-        audio = audio[:audio.shape[0] - (audio.shape[0] % hyper_paramters.Sound.Hop_Size)]
-        music_length = sum([x[0] for x in musics]) * hyper_paramters.Sound.Hop_Size
-        audio_length = audio.shape[0]
-        if music_length < audio_length:
-            audio = audio[:sum([x[0] for x in musics]) * hyper_paramters.Sound.Hop_Size]
-        audio = librosa.util.normalize(audio) * 0.95
-        
-        Pattern_File_Generate(
-            music= musics,
-            audio= audio,
-            music_label= music_label,
-            singer= singer,
-            genre= 'Pop',
-            language= 'English',
-            dataset= 'NUS48E',
-            is_eval_music= index == (len(paths) - 1),
-            hyper_paramters= hyper_paramters,
-            verbose= verbose
-            )
 
 def Kiritan(
     hyper_paramters: Namespace,
@@ -2077,12 +1772,9 @@ def Metadata_Generate(
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
-    argparser.add_argument('-csd', '--csd_path', required= False)
-    argparser.add_argument('-csde', '--csd_eng_path', required= False)
     argparser.add_argument('-amz', '--aihub_mediazen_path', required= False)
     argparser.add_argument('-amb', '--aihub_metabuild_path', required= False)
     argparser.add_argument('-m4', '--m4singer_path', required= False)
-    argparser.add_argument('-nus48e', '--nus48e_path', required= False)
     argparser.add_argument('-kiritan', '--kiritan_path', required= False)
     argparser.add_argument('-ofuton', '--ofuton_path', required= False)
     argparser.add_argument('-hp', '--hyper_paramters', required= True)
@@ -2094,19 +1786,6 @@ if __name__ == '__main__':
         Loader=yaml.Loader
         ))
 
-    if args.csd_path:
-        CSD_Fix(
-            hyper_paramters= hp,
-            dataset_path= args.csd_path,
-            verbose= args.verbose
-            )
-    if args.csd_eng_path:
-        CSD_Eng_Fix(
-            hyper_paramters= hp,
-            dataset_path= args.csd_eng_path,
-            verbose= args.verbose
-            )
-    
     if args.aihub_mediazen_path:
         AIHub_Mediazen(
             hyper_paramters= hp,
@@ -2118,13 +1797,6 @@ if __name__ == '__main__':
         M4Singer(
             hyper_paramters= hp,
             dataset_path= args.m4singer_path,
-            verbose= args.verbose
-            )
-   
-    if args.nus48e_path:
-        NUS48E(
-            hyper_paramters= hp,
-            dataset_path= args.nus48e_path,
             verbose= args.verbose
             )
         
@@ -2154,11 +1826,8 @@ if __name__ == '__main__':
     Metadata_Generate(hp, True)
 
 # python -m Pattern_Generator -hp Hyper_Parameters.yaml \
-#   -csd /mnt/f/Rawdata_Music/CSD_Fix \
-#   -csde /mnt/f/Rawdata_Music/CSD_1.1/english \
 #   -amz /mnt/f/Rawdata_Music/AIHub_Mediazen \
 #   -m4 /mnt/f/Rawdata_Music/m4singer \
-#   -nus48e /mnt/f/Rawdata_Music/NUS48E \
 #   -kiritan /mnt/f/Rawdata_Music/Kiritan \
 #   -amb /mnt/e/177.다음색 가이드보컬 데이터 \
 #   -verbose
