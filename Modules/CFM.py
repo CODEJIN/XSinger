@@ -4,6 +4,7 @@ from argparse import Namespace
 from typing import Optional, List, Dict, Union
 from tqdm import tqdm
 from torchdiffeq import odeint
+import ot
 
 from .Layer import Conv_Init, Lambda, FFT_Block, Norm_Type
 
@@ -18,7 +19,13 @@ class CFM(torch.nn.Module):
         self.network = Network(
             hyper_parameters= self.hp
             )
-        self.cosmap_calc = lambda x: 1.0 - (1 / (torch.tan(torch.pi / 2.0 * x) + 1))
+        
+        if self.hp.CFM.Scheduler.upper() == 'Uniform'.upper():
+            self.timestep_scheduler = lambda x: x
+        elif self.hp.CFM.Scheduler.upper() == 'Cosmap'.upper():
+            self.timestep_scheduler = lambda x: 1.0 - (1 / (torch.tan(torch.pi / 2.0 * x) + 1))
+        else:
+            raise NotImplementedError(f'Unsupported CFM scheduler: {self.hp.CFM.Scheduler}')
 
     def forward(
         self,
@@ -32,41 +39,55 @@ class CFM(torch.nn.Module):
         mels: [Batch, Mel_d, Mel_t]
         '''
         selected_times = torch.rand(encodings.size(0), device= encodings.device)   # [Batch]
-        cosmap_schedule_times = self.cosmap_calc(selected_times)[:, None, None]
+        schedule_times = self.timestep_scheduler(selected_times)[:, None, None]
 
         noises = torch.randn_like(mels)  # [Batch, Mel_d, Mel_t]
-
-        noised_mels = cosmap_schedule_times * mels + (1.0 - cosmap_schedule_times) * noises
+        noised_mels, ot_flows = Calc_OT_Path(
+            noises= noises,
+            mels= mels,
+            schedule_times= schedule_times
+            )
+        
         flows = mels - noises
 
         # predict flow
+
+        if self.hp.CFM.Use_CFG:
+            cfg_filters = (torch.rand(
+                encodings.size(0),
+                device= encodings.device
+                )[:, None, None] > self.hp.Train.CFG_Alpha).float()  # [Batch, 1, 1]            
+            encodings = encodings * cfg_filters
+            singers = singers * cfg_filters
+
         network_output = self.network.forward(
             noised_mels= noised_mels,
             encodings= encodings,
             singers= singers,
             lengths= lengths,
-            timesteps= cosmap_schedule_times[:, 0, 0] # [Batch]
+            timesteps= schedule_times[:, 0, 0] # [Batch]
             )
         
         if self.hp.CFM.Network_Prediction == 'Flow':
             prediction_flows = network_output
-            prediction_noises = noised_mels - prediction_flows * cosmap_schedule_times.clamp(1e-7)   # is it working?
+            prediction_noises = noised_mels - prediction_flows * schedule_times.clamp(1e-7)   # is it working?
         elif self.hp.CFM.Network_Prediction == 'Noise':
             prediction_noises = network_output
-            prediction_flows = (noised_mels - prediction_noises) / cosmap_schedule_times.clamp(1e-7)
+            prediction_flows = (noised_mels - prediction_noises) / schedule_times.clamp(1e-7)
         else:
             NotImplementedError(f'Unsupported network prediction type: {self.hp.CFM.Network_Prediction}')
 
         # prediction_mels = noised_mels + prediction_flows * (1.0 - cosmap_schedule_times)    # not using
 
-        return flows, prediction_flows, noises, prediction_noises
+        return flows, ot_flows, prediction_flows, noises, prediction_noises
     
     def Inference(
         self,
         encodings: torch.FloatTensor,
         singers: torch.FloatTensor,
         lengths: torch.IntTensor,
-        steps: int
+        steps: int,
+        cfg_guidance_scale: Optional[float]= 4.0
         ):
         noises = torch.randn(
             encodings.size(0), self.hp.Sound.N_Mel, encodings.size(2),
@@ -76,22 +97,31 @@ class CFM(torch.nn.Module):
         
         def ode_func(timesteps: torch.Tensor, noised_mels: torch.Tensor):
             timesteps = timesteps[None].expand(noised_mels.size(0))
-            cosmap_schedule_times = self.cosmap_calc(timesteps)[:, None, None]
+            schedule_times = self.timestep_scheduler(timesteps)[:, None, None]
 
             # predict flow
-            network_output = self.network.forward(
+            network_outputs = self.network.forward(
                 noised_mels= noised_mels,
                 encodings= encodings,
                 singers= singers,
                 lengths= lengths,
-                timesteps= cosmap_schedule_times[:, 0, 0] # [Batch]
+                timesteps= schedule_times[:, 0, 0] # [Batch]
                 )
+            if self.hp.CFM.Use_CFG:
+                network_outputs_without_condition = self.network.forward(
+                    noised_mels= noised_mels,
+                    encodings= torch.zeros_like(encodings),
+                    singers= torch.zeros_like(singers),
+                    lengths= lengths,
+                    timesteps= schedule_times[:, 0, 0] # [Batch]
+                    )
+                network_outputs = network_outputs + cfg_guidance_scale * (network_outputs - network_outputs_without_condition)
             
             if self.hp.CFM.Network_Prediction == 'Flow':
-                prediction_flows = network_output                
+                prediction_flows = network_outputs
             elif self.hp.CFM.Network_Prediction == 'Noise':
-                prediction_noises = network_output
-                prediction_flows = (noised_mels - prediction_noises) / cosmap_schedule_times.clamp(1e-7)
+                prediction_noises = network_outputs
+                prediction_flows = (noised_mels - prediction_noises) / schedule_times.clamp(1e-7)
             else:
                 NotImplementedError(f'Unsupported network prediction type: {self.hp.CFM.Network_Prediction}')
 
@@ -256,3 +286,36 @@ def Fused_Gate(x):
     x = x_tanh.tanh() * x_sigmoid.sigmoid()
 
     return x
+
+def Calc_OT_Path(
+    noises: torch.FloatTensor,
+    mels: torch.FloatTensor,
+    schedule_times: torch.FloatTensor,
+    sinkhorn_epsilon: float= 0.01,
+    sinkhorn_num_iter: int= 100,
+    ):
+    distances = torch.cdist(noises.mT, mels.mT) ** 2.0
+    
+    optimal_transports = torch.stack([
+        ot.bregman.sinkhorn_log(
+            a= torch.full(
+                (distance.size(0), ),
+                fill_value= 1.0 / distance.size(0),
+                device= distance.device
+                ),
+            b= torch.full(
+                (distance.size(1), ),
+                fill_value= 1.0 / distance.size(1),
+                device= distance.device
+                ),
+            M= distance.detach(),
+            reg= sinkhorn_epsilon,
+            numItermax= sinkhorn_num_iter
+            )
+        for distance in distances
+        ], dim= 0)
+    
+    noised_mels = schedule_times * mels + (1.0 - schedule_times) * (noises @ optimal_transports.mT)
+    ot_flows = mels - noised_mels
+
+    return noised_mels, ot_flows

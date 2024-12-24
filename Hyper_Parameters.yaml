@@ -59,6 +59,7 @@ Token_Predictor:
 
 CFM:
     Size: 512
+    Scheduler: 'Uniform' # 'Cosmap'
     Transformer:
         Stack: 6
         Head: 2
@@ -67,6 +68,8 @@ CFM:
             Kernel_Size: 3
             Dropout_Rate: 0.1
     Network_Prediction: 'Flow'   # 'Flow', 'Noise'
+    Use_Optimal_Transport: true
+    Use_CFG: true
 
 
 Token_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Token.yaml'
@@ -98,11 +101,13 @@ Train:
         Decay_Epoch: 10
         Lambda:
             Cross_Attention: 10.0
+            Optimal_Transport: 0.5
     ADAM:
         Beta1: 0.9
         Beta2: 0.999
         Epsilon: 1.0e-7
     Weight_Decay: 1.0e-6
+    CFG_Alpha: 0.1  # only using when Use_CFG is true
     Accumulated_Gradient_Step: 1 # 25    
     Gradient_Norm: 0.0
     Max_Step: 1000000
