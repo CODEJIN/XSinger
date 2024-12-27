@@ -42,11 +42,15 @@ class CFM(torch.nn.Module):
         schedule_times = self.timestep_scheduler(selected_times)[:, None, None]
 
         noises = torch.randn_like(mels)  # [Batch, Mel_d, Mel_t]
-        noised_mels, ot_flows = Calc_OT_Path(
-            noises= noises,
-            mels= mels,
-            schedule_times= schedule_times
-            )
+        if self.hp.CFM.Use_Optimal_Transport:
+            noised_mels, ot_flows = Calc_OT_Path(
+                noises= noises,
+                mels= mels,
+                schedule_times= schedule_times
+                )
+        else:
+            noised_mels = schedule_times * mels + (1.0 - schedule_times) * noises
+            ot_flows = None
         
         flows = mels - noises
 

@@ -90,7 +90,7 @@ Train:
         Metadata_File: 'METADATA.PICKLE'
         Accumulated_Dataset_Epoch: 4   # When singer is 1, evaluation pattern is also 1. Because offset is selected randomly, this is meaningful.
     Num_Workers: 8
-    Batch_Size: 32
+    Batch_Size: 16
     Pattern_Length:
         Min: 384
         Max: 768
@@ -98,7 +98,7 @@ Train:
     Learning_Rate:
         Initial: 1.0e-4
         Decay: 0.999875
-        Decay_Epoch: 10
+        Decay_Epoch: 1
         Lambda:
             Cross_Attention: 10.0
             Optimal_Transport: 0.5
