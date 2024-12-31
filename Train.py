@@ -252,7 +252,7 @@ class Trainer:
         ):
         loss_dict = {}
         with self.accelerator.accumulate(self.model_dict['RectifiedFlowSVS']):
-            flows, ot_flows, prediction_flows, \
+            flows, prediction_flows, \
             target_mels, prediction_mels, \
             cross_attention_alignments, prediction_tokens = self.model_dict['RectifiedFlowSVS'](
                 tokens= tokens,
@@ -276,11 +276,6 @@ class Trainer:
                 prediction_flows,
                 flows,
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_flows.size(1)            
-            if self.hp.CFM.Use_Optimal_Transport:
-                loss_dict['OT'] = (self.criterion_dict['MSE'](
-                    prediction_flows,
-                    ot_flows,
-                    ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_flows.size(1)            
             loss_dict['Encoding'] = (self.criterion_dict['MSE'](
                 prediction_mels,
                 target_mels,
@@ -302,7 +297,6 @@ class Trainer:
             self.optimizer_dict['RectifiedFlowSVS'].zero_grad()
             self.accelerator.backward(
                 loss_dict['CFM'] +
-                (loss_dict['OT'] if self.hp.CFM.Use_Optimal_Transport else 0.0) +
                 loss_dict['Encoding'] +
                 loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention +
                 loss_dict['Token']
@@ -397,7 +391,7 @@ class Trainer:
         mel_lengths: torch.IntTensor,
         ):
         loss_dict = {}
-        flows, ot_flows, prediction_flows, \
+        flows, prediction_flows, \
         target_mels, prediction_mels, \
         cross_attention_alignments, prediction_tokens = self.model_dict['RectifiedFlowSVS'](
             tokens= tokens,
@@ -421,11 +415,6 @@ class Trainer:
             prediction_flows,
             flows,
             ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_flows.size(1)
-        if self.hp.CFM.Use_Optimal_Transport:
-            loss_dict['OT'] = (self.criterion_dict['MSE'](
-                prediction_flows,
-                ot_flows,
-                ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_flows.size(1)
         loss_dict['Encoding'] = (self.criterion_dict['MSE'](
                 prediction_mels,
                 target_mels,

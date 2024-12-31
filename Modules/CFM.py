@@ -38,24 +38,6 @@ class CFM(torch.nn.Module):
         encodings: [Batch, Enc_d, Dec_t]
         mels: [Batch, Mel_d, Mel_t]
         '''
-        selected_times = torch.rand(encodings.size(0), device= encodings.device)   # [Batch]
-        schedule_times = self.timestep_scheduler(selected_times)[:, None, None]
-
-        noises = torch.randn_like(mels)  # [Batch, Mel_d, Mel_t]
-        if self.hp.CFM.Use_Optimal_Transport:
-            noised_mels, ot_flows = Calc_OT_Path(
-                noises= noises,
-                mels= mels,
-                schedule_times= schedule_times
-                )
-        else:
-            noised_mels = schedule_times * mels + (1.0 - schedule_times) * noises
-            ot_flows = None
-        
-        flows = mels - noises
-
-        # predict flow
-
         if self.hp.CFM.Use_CFG:
             cfg_filters = (torch.rand(
                 encodings.size(0),
@@ -64,26 +46,30 @@ class CFM(torch.nn.Module):
             encodings = encodings * cfg_filters
             singers = singers * cfg_filters
 
+        timesteps = self.timestep_scheduler(
+            torch.rand(encodings.size(0), device= encodings.device)
+            )[:, None, None]
+
+        noises = torch.randn_like(mels)  # [Batch, Mel_d, Mel_t]
+        if self.hp.CFM.Use_OT:
+            noises = self.OT_CFM_Sampling(mels)
+        else:
+            noises = torch.randn_like(mels)  # [Batch, Mel_d, Mel_t]
+        
+        noised_mels = timesteps * mels + (1.0 - timesteps) * noises  # [Batch, Mel_d, Mel_t]
+        flows = mels - noises
+
+        # predict flow
         network_output = self.network.forward(
             noised_mels= noised_mels,
             encodings= encodings,
             singers= singers,
             lengths= lengths,
-            timesteps= schedule_times[:, 0, 0] # [Batch]
-            )
-        
-        if self.hp.CFM.Network_Prediction == 'Flow':
-            prediction_flows = network_output
-            prediction_noises = noised_mels - prediction_flows * schedule_times.clamp(1e-7)   # is it working?
-        elif self.hp.CFM.Network_Prediction == 'Noise':
-            prediction_noises = network_output
-            prediction_flows = (noised_mels - prediction_noises) / schedule_times.clamp(1e-7)
-        else:
-            NotImplementedError(f'Unsupported network prediction type: {self.hp.CFM.Network_Prediction}')
+            timesteps= timesteps[:, 0, 0] # [Batch]
+            )        
+        prediction_flows = network_output
 
-        # prediction_mels = noised_mels + prediction_flows * (1.0 - cosmap_schedule_times)    # not using
-
-        return flows, ot_flows, prediction_flows, noises, prediction_noises
+        return flows, prediction_flows
     
     def Inference(
         self,
@@ -121,13 +107,7 @@ class CFM(torch.nn.Module):
                     )
                 network_outputs = network_outputs + cfg_guidance_scale * (network_outputs - network_outputs_without_condition)
             
-            if self.hp.CFM.Network_Prediction == 'Flow':
-                prediction_flows = network_outputs
-            elif self.hp.CFM.Network_Prediction == 'Noise':
-                prediction_noises = network_outputs
-                prediction_flows = (noised_mels - prediction_noises) / schedule_times.clamp(1e-7)
-            else:
-                NotImplementedError(f'Unsupported network prediction type: {self.hp.CFM.Network_Prediction}')
+            prediction_flows = network_outputs
 
             return prediction_flows
         
@@ -141,6 +121,51 @@ class CFM(torch.nn.Module):
             )[-1]
 
         return mels
+    
+    @torch.compile
+    def OT_CFM_Sampling(
+        self,
+        mels: torch.FloatTensor,
+        reg: float= 0.05
+        ):
+        noises = torch.randn(
+            size= (mels.size(0) * self.hp.Train.OT_Noise_Multiplier, mels.size(1), mels.size(2)),
+            device= mels.device
+            )
+
+        distances = torch.cdist(
+            noises.view(noises.size(0), -1),
+            mels.view(mels.size(0), -1)
+            ).detach() ** 2.0        
+        distances = distances / distances.max() # without normalize_cost, sinkhorn is failed.
+
+        ot_maps = ot.bregman.sinkhorn_log(
+            a= torch.full(
+                (noises.size(0), ),
+                fill_value= 1.0 / noises.size(0),
+                device= noises.device
+                ),
+            b= torch.full(
+                (mels.size(0), ),
+                fill_value= 1.0 / mels.size(0),
+                device= mels.device
+                ),
+            M= distances,
+            reg= reg
+            )
+        probabilities = ot_maps / ot_maps.sum(dim= 0, keepdim= True)
+        noise_indices = torch.cat([
+            torch.multinomial(
+                probability,
+                num_samples= 1,
+                replacement= True
+                )
+            for probability in probabilities.T
+            ])
+
+        sampled_noises = noises[noise_indices]
+
+        return sampled_noises
 
 class Network(torch.nn.Module):
     def __init__(
@@ -290,36 +315,3 @@ def Fused_Gate(x):
     x = x_tanh.tanh() * x_sigmoid.sigmoid()
 
     return x
-
-def Calc_OT_Path(
-    noises: torch.FloatTensor,
-    mels: torch.FloatTensor,
-    schedule_times: torch.FloatTensor,
-    sinkhorn_epsilon: float= 0.01,
-    sinkhorn_num_iter: int= 100,
-    ):
-    distances = torch.cdist(noises.mT, mels.mT) ** 2.0
-    
-    optimal_transports = torch.stack([
-        ot.bregman.sinkhorn_log(
-            a= torch.full(
-                (distance.size(0), ),
-                fill_value= 1.0 / distance.size(0),
-                device= distance.device
-                ),
-            b= torch.full(
-                (distance.size(1), ),
-                fill_value= 1.0 / distance.size(1),
-                device= distance.device
-                ),
-            M= distance.detach(),
-            reg= sinkhorn_epsilon,
-            numItermax= sinkhorn_num_iter
-            )
-        for distance in distances
-        ], dim= 0)
-    
-    noised_mels = schedule_times * mels + (1.0 - schedule_times) * (noises @ optimal_transports.mT)
-    ot_flows = mels - noised_mels
-
-    return noised_mels, ot_flows

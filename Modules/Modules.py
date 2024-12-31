@@ -58,7 +58,7 @@ class RectifiedFlowSVS(torch.nn.Module):
         
         linear_prediction_mels = self.linear_projection(encodings)
 
-        flows, ot_flows, prediction_flows, _, _ = self.cfm(
+        flows, prediction_flows = self.cfm(
             encodings= linear_prediction_mels,
             singers= singers,
             mels= target_mels,
@@ -68,7 +68,7 @@ class RectifiedFlowSVS(torch.nn.Module):
         prediction_tokens = self.token_predictor(encodings)
 
         return \
-            flows, ot_flows, prediction_flows, \
+            flows, prediction_flows, \
             target_mels, linear_prediction_mels, \
             cross_attention_alignments, prediction_tokens
     

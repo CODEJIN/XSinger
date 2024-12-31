@@ -67,8 +67,7 @@ CFM:
         FFN:
             Kernel_Size: 3
             Dropout_Rate: 0.1
-    Network_Prediction: 'Flow'   # 'Flow', 'Noise'
-    Use_Optimal_Transport: true
+    Use_OT: true
     Use_CFG: true
 
 
@@ -89,7 +88,7 @@ Train:
         Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Eval'
         Metadata_File: 'METADATA.PICKLE'
         Accumulated_Dataset_Epoch: 4   # When singer is 1, evaluation pattern is also 1. Because offset is selected randomly, this is meaningful.
-    Num_Workers: 8
+    Num_Workers: 2
     Batch_Size: 16
     Pattern_Length:
         Min: 384
@@ -108,6 +107,7 @@ Train:
         Epsilon: 1.0e-7
     Weight_Decay: 1.0e-6
     CFG_Alpha: 0.1  # only using when Use_CFG is true
+    OT_Noise_Multiplier: 4  # only using when Use_OT is true
     Accumulated_Gradient_Step: 1 # 25    
     Gradient_Norm: 0.0
     Max_Step: 1000000
