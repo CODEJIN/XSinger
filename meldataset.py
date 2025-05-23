@@ -88,8 +88,8 @@ def mel_spectrogram(
         logging.warning('max value is {}'.format(torch.max(y)))
 
     device = y.device
-    mel_key = f'{n_fft}_{num_mels}_{sampling_rate}_{fmin}_{fmax}_{device}'
-    hann_window_key = f'{win_size}_{device}'
+    mel_key = f'{n_fft}_{num_mels}_{sampling_rate}_{fmin}_{fmax}_{device}_{torch.is_inference_mode_enabled()}'
+    hann_window_key = f'{win_size}_{device}_{torch.is_inference_mode_enabled()}'
     
     if mel_key not in mel_basis_caches:
         mel = librosa_mel_fn(
@@ -140,7 +140,7 @@ def cepstral_liftering(y, n_fft, feature_size, hop_size, win_size, cutoff= 3, ce
         logging.warning('max value is {}'.format(torch.max(y)))
 
     device = y.device
-    hann_window_key = f'{win_size}_{device}'
+    hann_window_key = f'{win_size}_{device}_{torch.is_inference_mode_enabled()}'
     if hann_window_key not in hann_window_caches:
         hann_window_caches[hann_window_key] = torch.hann_window(win_size).to(device)
     hann_window = hann_window_caches[hann_window_key]
@@ -171,7 +171,7 @@ def spectrogram(y, n_fft, hop_size, win_size, center=False, use_normalize= True)
         logging.warning('max value is {}'.format(torch.max(y)))
 
     device = y.device
-    hann_window_key = f'{win_size}_{device}'
+    hann_window_key = f'{win_size}_{device}_{torch.is_inference_mode_enabled()}'
     if hann_window_key not in hann_window_caches:
         hann_window_caches[hann_window_key] = torch.hann_window(win_size).to(device)
     hann_window = hann_window_key
@@ -192,7 +192,7 @@ def spectrogram_to_mel(spec, n_fft, num_mels, sampling_rate, win_size, fmin, fma
     spec = spectral_de_normalize_torch(spec) if use_denorm else spec
     
     device = spec.device
-    mel_key = f'{n_fft}_{num_mels}_{sampling_rate}_{fmin}_{fmax}_{device}'
+    mel_key = f'{n_fft}_{num_mels}_{sampling_rate}_{fmin}_{fmax}_{device}_{torch.is_inference_mode_enabled()}'
     
     if mel_key not in mel_basis_caches:
         mel = librosa_mel_fn(
@@ -218,7 +218,7 @@ def spec_energy(y, n_fft, hop_size, win_size, center=False):
         logging.warning('max value is {}'.format(torch.max(y)))
 
     device = y.device
-    hann_window_key = f'{win_size}_{device}'
+    hann_window_key = f'{win_size}_{device}_{torch.is_inference_mode_enabled()}'
     
     if hann_window_key not in hann_window_caches:
         hann_window_caches[hann_window_key] = torch.hann_window(win_size).to(device)
@@ -270,7 +270,7 @@ def vtlp(y: torch.Tensor, n_fft: int, sampling_rate: int, hop_size: int, win_siz
         logging.warning('max value is {}'.format(torch.max(y)))
 
     device = y.device
-    hann_window_key = f'{win_size}_{device}'
+    hann_window_key = f'{win_size}_{device}_{torch.is_inference_mode_enabled()}'
     
     if hann_window_key not in hann_window_caches:
         hann_window_caches[hann_window_key] = torch.hann_window(win_size).to(device)

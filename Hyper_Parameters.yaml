@@ -8,9 +8,8 @@ Sound:
 Tokens: 124
 Notes: 128
 Durations: 10000
-Genres: 7
-Singers: 144
-Languages: 4
+Singers: 1
+Languages: 1
 
 Encoder:
     Size: 384
@@ -50,12 +49,6 @@ Encoder:
         FFN:
             Kernel_Size: 7
             Dropout_Rate: 0.1
-
-Token_Predictor:
-    Size: 256
-    LSTM:
-        Stack: 2
-        Dropout_Rate: 0.0
 
 CFM:
     Size: 512

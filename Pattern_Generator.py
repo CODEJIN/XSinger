@@ -16,6 +16,7 @@ from typing import Dict, Union
 from meldataset import mel_spectrogram
 from Phonemize import Phonemize, Language, _Korean_Syllablize, _Chinese_Syllablize, _Japanese_Syllable_to_IPA
 
+from meldataset import mel_spectrogram
 from Arg_Parser import Recursive_Parse
 
 import matplotlib as mpl
@@ -35,6 +36,194 @@ if __name__ == '__main__':
         device = torch.device('cpu')
     else:
         device = torch.device('cuda:0')
+
+def CSD(
+    hyper_paramters: Namespace,
+    dataset_path: str,
+    verbose: bool= False
+    ):
+    paths = []
+    for root, _, files in os.walk(os.path.join(dataset_path, 'wav').replace('\\', '/')):
+        for file in sorted(files):
+            if os.path.splitext(file)[1] != '.wav':
+                continue
+            wav_path = os.path.join(root, file).replace('\\', '/')
+            midi_path = wav_path.replace('wav', 'csv')
+            lyric_path = os.path.join(root.replace('wav', 'lyric'), file.replace('wav', 'txt'))
+            
+            if not os.path.exists(midi_path):
+                raise FileExistsError(midi_path)
+
+            paths.append((wav_path, midi_path, lyric_path))
+
+    for index, (wav_path, midi_path, lyric_path) in tqdm(
+        enumerate(paths),
+        total= len(paths),
+        desc= 'CSD'
+        ):
+        music_label = os.path.splitext(os.path.basename(wav_path))[0]
+        pattern_path = os.path.join(
+            hyper_paramters.Train.Train_Pattern.Path if not index == (len(paths) - 1) else hyper_paramters.Train.Eval_Pattern.Path,
+            'CSD',
+            'CSD',
+            f'{music_label}.pickle'
+            ).replace('\\', '/')
+        if os.path.exists(pattern_path) or os.path.exists(os.path.join(f'./note_error/CSD/CSD/{music_label}.png')):
+            continue
+
+        mid = pd.read_csv(midi_path)
+        lyric = ''.join(open(lyric_path, encoding= 'utf-8-sig').readlines()).replace('\n', '').replace(' ', '')
+        music = []
+        for x, syllable in zip(mid.iloc, lyric):
+            if len(music) == 0 and x.start > 0.0:   # initial silence
+                music.append([0.0, x.start, '<X>', 0])
+            elif len(music) > 0 and music[-1][1] < x.start:
+                music.append([music[-1][1], x.start, '<X>', 0])
+            elif len(music) > 0 and music[-1][1] > x.start:
+                x.start = music[-1][1]
+
+            if x.end <= x.start:
+                print(x)
+                assert False
+
+            music.append([
+                x.start,
+                x.end,
+                syllable,
+                x.pitch
+                ])
+
+        music = [
+            (end - start, syllable, note)
+            for start, end, syllable, note in music
+            ]
+        audio, _ = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)
+        
+        initial_audio_length = audio.shape[0]
+        while True:
+            if music[0][1] == '<X>':
+                audio = audio[int(music[0][0] * hyper_paramters.Sound.Sample_Rate):]
+                music = music[1:]
+            else:
+                break
+        while True:
+            if music[-1][1] == '<X>':
+                music = music[:-1]
+            else:
+                break
+        audio = audio[:int(sum([x[0] for x in music]) * hyper_paramters.Sound.Sample_Rate)]    # remove last silence
+        
+        # This is to avoid to use wrong data.
+        if initial_audio_length * 0.5 > audio.shape[0]:
+            continue
+
+        audio = librosa.util.normalize(audio) * 0.95
+        music = Korean_G2P_Lyric(music)
+        
+        music = Convert_Feature_Based_Duration(
+            music= music,
+            sample_rate= hyper_paramters.Sound.Sample_Rate,
+            hop_size= hyper_paramters.Sound.Hop_Size
+            )
+        
+        is_generated = Pattern_File_Generate(
+            music= music,
+            audio= audio,
+            music_label= music_label,
+            singer= 'CSD',
+            genre= 'Children',
+            language= 'Korean',
+            dataset= 'CSD',
+            is_eval_music= index == 0,
+            hyper_paramters= hyper_paramters,
+            verbose= verbose
+            )
+
+
+def CSD_Eng_Fix(
+    hyper_paramters: Namespace,
+    dataset_path: str,
+    verbose: bool= False
+    ):
+    paths = []
+    for root, _, files in os.walk(os.path.join(dataset_path, 'wav').replace('\\', '/')):
+        for file in sorted(files):
+            if os.path.splitext(file)[1] != '.wav':
+                continue
+            wav_path = os.path.join(root, file).replace('\\', '/')
+            midi_path = wav_path.replace('wav', 'csv')
+            lyric_path = wav_path.replace('wav/', 'ipa/').replace('.wav', '.txt')
+            
+            if not os.path.exists(midi_path):
+                raise FileExistsError(midi_path)
+            elif not os.path.exists(lyric_path):
+                raise FileExistsError(lyric_path)
+
+            paths.append((wav_path, midi_path, lyric_path))
+
+    paths = sorted(paths, key= lambda x: x[0])
+
+    for index, (wav_path, midi_path, lyric_path) in tqdm(
+        enumerate(paths),
+        total= len(paths),
+        desc= 'CSD_Eng'
+        ):
+        music_label = os.path.splitext(os.path.basename(wav_path))[0]
+        pattern_path = os.path.join(
+            hyper_paramters.Train.Train_Pattern.Path if not index == (len(paths) - 1) else hyper_paramters.Train.Eval_Pattern.Path,
+            'CSD',
+            'CSD',
+            f'{music_label}.pickle'
+            ).replace('\\', '/')
+        if os.path.exists(pattern_path) or os.path.exists(os.path.join(f'./note_error/CSD/CSD/{music_label}.png')):
+            continue
+
+        midi_df = pd.read_csv(midi_path)
+        lyrics = [
+            line.strip().split('\t')[0]
+            for line in open(lyric_path, 'r', encoding= 'utf-8-sig').readlines()
+            ]   # deque is better, but I don't use.
+        assert len(lyrics) == len(midi_df), f'There is a lyric data has a problem in: \'{lyric_path}\', lyric length: {len(lyrics)}, midi length: {len(midi_df)}'
+        midi_df['syllable'] = lyrics
+
+        music = []
+        last_end_time = 0.0
+        for _, row in midi_df.iterrows():
+            if last_end_time < row['start']:
+                music.append((row['start'] - last_end_time, '<X>', 0))
+            elif last_end_time > row['start']:
+                row['start'] = last_end_time
+
+            music.append((row['end'] - row['start'], row['syllable'], row['pitch']))
+            last_end_time = row['end']
+
+        music = English_Phoneme_Split(music)
+        music = Convert_Feature_Based_Duration(
+            music= music,
+            sample_rate= hyper_paramters.Sound.Sample_Rate,
+            hop_size= hyper_paramters.Sound.Hop_Size
+            )
+        
+        audio, _ = librosa.load(wav_path, sr= hyper_paramters.Sound.Sample_Rate)        
+        audio = audio[:int(sum([x[0] for x in music]) * hyper_paramters.Sound.Sample_Rate)]
+        music_length = sum([x[0] for x in music]) * hyper_paramters.Sound.Hop_Size
+        audio_length = audio.shape[0]
+        if music_length < audio_length:
+            audio = audio[:music_length]
+        audio = librosa.util.normalize(audio) * 0.95
+        
+        Pattern_File_Generate(
+            music= music,
+            audio= audio,
+            music_label= music_label,
+            singer= 'CSD',
+            genre= 'Children',
+            language= 'English',
+            dataset= 'CSD',
+            is_eval_music= index == (len(paths) - 1),
+            hyper_paramters= hyper_paramters,
+            verbose= verbose
+            )
 
 def AIHub_Mediazen(
     hyper_paramters: Namespace,
@@ -1323,8 +1512,14 @@ def Convert_Feature_Based_Duration(
     previous_used = 0
 
     feature_based_music = []
+
     for message_time, lyric, note, text in music:
         duration = round(message_time * sample_rate) + previous_used
+        
+        if duration <= 0:
+            print(message_time, lyric, note, text, duration)
+            assert False
+        
         previous_used = duration % hop_size
         duration = duration // hop_size
 
@@ -1485,6 +1680,7 @@ def Pattern_File_Generate(
         )[:mel.shape[1]]
     
     music_length = sum([x[0] for x in music])
+
     if mel.shape[1] > music_length:
         # print('Case1')
         mel = mel[:, math.floor((mel.shape[1] - music_length) / 2.0):-math.ceil((mel.shape[1] - music_length) / 2.0)]
@@ -1512,7 +1708,6 @@ def Pattern_File_Generate(
             ]).astype(np.float16)
 
     note_from_midi = Calc_Note_from_Music(music)
-
     note_from_f0_without_0, note_from_midi_without_0 = note_from_f0[(note_from_f0 > 0) * (note_from_midi > 0)], note_from_midi[(note_from_f0 > 0) * (note_from_midi > 0)]
     note_error_value = np.abs(note_from_f0_without_0 - note_from_midi_without_0).mean()
 
@@ -1643,8 +1838,24 @@ def Metadata_Generate(
     pattern_path = hyper_parameters.Train.Eval_Pattern.Path if eval else hyper_parameters.Train.Train_Pattern.Path
     metadata_file = hyper_parameters.Train.Eval_Pattern.Metadata_File if eval else hyper_parameters.Train.Train_Pattern.Metadata_File
 
-    mel_dict = {}
-    f0_dict = {}
+    mel_dict = {
+        'Total': {
+            'Min': math.inf,
+            'Max': -math.inf,
+            'Sum': 0.0,
+            'Sum_of_Square': 0.0,
+            'Count': 0.0
+            }
+        }
+    f0_dict = {
+        'Total': {
+            'Min': math.inf,
+            'Max': -math.inf,
+            'Sum': 0.0,
+            'Sum_of_Square': 0.0,
+            'Count': 0.0
+            }
+        }
     tokens = []
     singers = []
     genres = []
@@ -1673,7 +1884,7 @@ def Metadata_Generate(
         for file in files:
             # print(os.path.join(root, file).replace('\\', '/'))
             with open(os.path.join(root, file).replace('\\', '/'), 'rb') as f:
-                pattern_dict = pickle.load(f)
+                pattern_dict = pickle.load(f)                
             file = os.path.join(root, file).replace('\\', '/').replace(pattern_path, '').lstrip('/')
             if not all([
                 key in pattern_dict.keys()
@@ -1681,6 +1892,8 @@ def Metadata_Generate(
                 ]):
                 print(f'Skipped pickle file \'{file}\' because of insufficient dict_keys: {pattern_dict.keys()}')
                 continue
+            pattern_dict['Mel'] = pattern_dict['Mel'].astype(object)
+            pattern_dict['F0'] = pattern_dict['F0'].astype(object)
 
             new_metadata_dict['Mel_Length_Dict'][file] = pattern_dict['Mel'].shape[1]
             new_metadata_dict['F0_Length_Dict'][file] = pattern_dict['F0'].shape[0]
@@ -1692,24 +1905,70 @@ def Metadata_Generate(
             new_metadata_dict['File_List_by_Singer_Dict'][pattern_dict['Singer']].append(file)
 
             if not pattern_dict['Singer'] in mel_dict.keys():
-                mel_dict[pattern_dict['Singer']] = {'Min': math.inf, 'Max': -math.inf}
+                mel_dict[pattern_dict['Singer']] = {
+                    'Min': math.inf,
+                    'Max': -math.inf,
+                    'Sum': 0.0,
+                    'Sum_of_Square': 0.0,
+                    'Count': 0.0
+                    }
             if not pattern_dict['Singer'] in f0_dict.keys():
-                f0_dict[pattern_dict['Singer']] = []
-            
-            mel_dict[pattern_dict['Singer']]['Min'] = min(mel_dict[pattern_dict['Singer']]['Min'], pattern_dict['Mel'].min().item())
-            mel_dict[pattern_dict['Singer']]['Max'] = max(mel_dict[pattern_dict['Singer']]['Max'], pattern_dict['Mel'].max().item())
-            
-            f0_dict[pattern_dict['Singer']].append(pattern_dict['F0'])
+                f0_dict[pattern_dict['Singer']] = {
+                    'Min': math.inf,
+                    'Max': -math.inf,
+                    'Sum': 0.0,
+                    'Sum_of_Square': 0.0,
+                    'Count': 0.0
+                    }
+                
+            mel_dict['Total']['Min'] = min(mel_dict['Total']['Min'], pattern_dict['Mel'].min())
+            mel_dict['Total']['Max'] = max(mel_dict['Total']['Max'], pattern_dict['Mel'].max())
+            mel_dict['Total']['Sum'] = mel_dict['Total']['Sum'] + pattern_dict['Mel'].sum()
+            mel_dict['Total']['Sum_of_Square'] = mel_dict['Total']['Sum_of_Square'] + (pattern_dict['Mel'] ** 2.0).sum()
+            mel_dict['Total']['Count'] = mel_dict['Total']['Count'] + pattern_dict['Mel'].size
+
+            mel_dict[pattern_dict['Singer']]['Min'] = min(mel_dict[pattern_dict['Singer']]['Min'], pattern_dict['Mel'].min())
+            mel_dict[pattern_dict['Singer']]['Max'] = max(mel_dict[pattern_dict['Singer']]['Max'], pattern_dict['Mel'].max())
+            mel_dict[pattern_dict['Singer']]['Sum'] = mel_dict[pattern_dict['Singer']]['Sum'] + pattern_dict['Mel'].sum()
+            mel_dict[pattern_dict['Singer']]['Sum_of_Square'] = mel_dict[pattern_dict['Singer']]['Sum_of_Square'] + (pattern_dict['Mel'] ** 2.0).sum()
+            mel_dict[pattern_dict['Singer']]['Count'] = mel_dict[pattern_dict['Singer']]['Count'] + pattern_dict['Mel'].size
+
+
+            f0_dict['Total']['Min'] = min(f0_dict['Total']['Min'], pattern_dict['F0'].min())
+            f0_dict['Total']['Max'] = max(f0_dict['Total']['Max'], pattern_dict['F0'].max())
+            f0_dict['Total']['Sum'] = f0_dict['Total']['Sum'] + pattern_dict['F0'].sum()
+            f0_dict['Total']['Sum_of_Square'] = f0_dict['Total']['Sum_of_Square'] + (pattern_dict['F0'] ** 2.0).sum()
+            f0_dict['Total']['Count'] = f0_dict['Total']['Count'] + pattern_dict['F0'].size
+
+            f0_dict[pattern_dict['Singer']]['Min'] = min(f0_dict[pattern_dict['Singer']]['Min'], pattern_dict['F0'].min())
+            f0_dict[pattern_dict['Singer']]['Max'] = max(f0_dict[pattern_dict['Singer']]['Max'], pattern_dict['F0'].max())
+            f0_dict[pattern_dict['Singer']]['Sum'] = f0_dict[pattern_dict['Singer']]['Sum'] + pattern_dict['F0'].sum()
+            f0_dict[pattern_dict['Singer']]['Sum_of_Square'] = f0_dict[pattern_dict['Singer']]['Sum_of_Square'] + (pattern_dict['F0'] ** 2.0).sum()
+            f0_dict[pattern_dict['Singer']]['Count'] = f0_dict[pattern_dict['Singer']]['Count'] + pattern_dict['F0'].size
+
             tokens.extend([phoneme for _, lyric, _, _ in pattern_dict['Music'] for phoneme in lyric])
             singers.append(pattern_dict['Singer'])
             genres.append(pattern_dict['Genre'])
             languages.append(pattern_dict['Language'])
-
             min_note = min(min_note, *[note for _, _, note, _ in pattern_dict['Music'] if note > 0])
             max_note = max(max_note, *[note for _, _, note, _ in pattern_dict['Music'] if note > 0])
             
             files_tqdm.update(1)
 
+    for singer in mel_dict.keys():
+        mel_dict[singer]['Mean'] = mel_dict[singer]['Sum'] / mel_dict[singer]['Count']
+        mel_dict[singer]['Std'] = math.sqrt(mel_dict[singer]['Sum_of_Square'] / mel_dict[singer]['Count'] - (mel_dict[singer]['Mean'] ** 2))
+        del mel_dict[singer]['Sum']
+        del mel_dict[singer]['Sum_of_Square']
+        del mel_dict[singer]['Count']
+
+    for singer in f0_dict.keys():
+        f0_dict[singer]['Mean'] = f0_dict[singer]['Sum'] / f0_dict[singer]['Count']
+        f0_dict[singer]['Std'] = math.sqrt(f0_dict[singer]['Sum_of_Square'] / f0_dict[singer]['Count'] - (f0_dict[singer]['Mean'] ** 2))
+        del f0_dict[singer]['Sum']
+        del f0_dict[singer]['Sum_of_Square']
+        del f0_dict[singer]['Count']
+    
     new_metadata_dict['Min_Note'] = min_note
     new_metadata_dict['Max_Note'] = max_note
 
@@ -1722,19 +1981,8 @@ def Metadata_Generate(
             open(hp.Mel_Info_Path, 'w')
             )
         
-        f0_info_dict = {}
-        for singer, f0_list in f0_dict.items():
-            f0 = np.hstack(f0_list).astype(np.float32)
-            f0 = np.clip(f0, 0.0, np.inf)
-            
-            f0_info_dict[singer] = {
-                'Mean': f0.mean().item(),
-                'Std': f0.std().item(),
-                'Min': f0.min().item(),
-                'Max': f0.max().item(),
-                }
         yaml.dump(
-            f0_info_dict,
+            f0_dict,
             open(hp.F0_Info_Path, 'w')
             )
 
@@ -1772,6 +2020,8 @@ def Metadata_Generate(
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
+    argparser.add_argument('-csd', '--csd_path', required= False)
+    argparser.add_argument('-csde', '--csd_eng_path', required= False)
     argparser.add_argument('-amz', '--aihub_mediazen_path', required= False)
     argparser.add_argument('-amb', '--aihub_metabuild_path', required= False)
     argparser.add_argument('-m4', '--m4singer_path', required= False)
@@ -1785,6 +2035,19 @@ if __name__ == '__main__':
         open(args.hyper_paramters, encoding='utf-8'),
         Loader=yaml.Loader
         ))
+
+    if args.csd_path:
+        CSD(
+            hyper_paramters= hp,
+            dataset_path= args.csd_path,
+            verbose= args.verbose
+            )
+    if args.csd_eng_path:
+        CSD_Eng_Fix(
+            hyper_paramters= hp,
+            dataset_path= args.csd_eng_path,
+            verbose= args.verbose
+            )
 
     if args.aihub_mediazen_path:
         AIHub_Mediazen(
@@ -1831,3 +2094,5 @@ if __name__ == '__main__':
 #   -kiritan /mnt/f/Rawdata_Music/Kiritan \
 #   -amb /mnt/e/177.다음색 가이드보컬 데이터 \
 #   -verbose
+
+# python -m Pattern_Generator -hp Hyper_Parameters.yaml -csd /mnt/f/Rawdata_Music/CSD_1.1/korean

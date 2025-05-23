@@ -10,13 +10,13 @@ class RectifiedFlowSVS(torch.nn.Module):
     def __init__(
         self,
         hyper_parameters: Namespace,
-        mel_min: float,
-        mel_max: float
+        mel_mean: float,
+        mel_std: float,
         ):
         super().__init__()
         self.hp = hyper_parameters
-        self.mel_min = mel_min
-        self.mel_max = mel_max
+        self.mel_mean = mel_mean
+        self.mel_std = mel_std
 
         self.encoder = Encoder(self.hp)
         self.linear_projection = Conv_Init(torch.nn.Conv1d(
@@ -26,8 +26,6 @@ class RectifiedFlowSVS(torch.nn.Module):
             ), w_init_gain= 'linear')
 
         self.cfm = CFM(self.hp)
-
-        self.token_predictor = Token_Predictor(self.hp)
 
     def forward(
         self,
@@ -42,7 +40,7 @@ class RectifiedFlowSVS(torch.nn.Module):
         mels: torch.FloatTensor,
         mel_lengths: torch.IntTensor,
         ):
-        target_mels = (mels - self.mel_min) / (self.mel_max - self.mel_min) * 2.0 - 1.0
+        target_mels = (mels - self.mel_mean) / self.mel_std
 
         encodings, singers, cross_attention_alignments = self.encoder(
             tokens= tokens,
@@ -55,7 +53,6 @@ class RectifiedFlowSVS(torch.nn.Module):
             singers= singers,
             mel_lengths= mel_lengths
             )    # [Batch, Enc_d, Dec_t], [Batch, Enc_d, Dec_t], [Batch, Dec_t, Token_t]
-        
         linear_prediction_mels = self.linear_projection(encodings)
 
         flows, prediction_flows = self.cfm(
@@ -65,12 +62,11 @@ class RectifiedFlowSVS(torch.nn.Module):
             lengths= mel_lengths,
             )
 
-        prediction_tokens = self.token_predictor(encodings)
-
         return \
             flows, prediction_flows, \
             target_mels, linear_prediction_mels, \
-            cross_attention_alignments, prediction_tokens
+            cross_attention_alignments
+            
     
     def Inference(
         self,
@@ -106,12 +102,12 @@ class RectifiedFlowSVS(torch.nn.Module):
             steps= cfm_steps,
             )
         
-        mels = (mels + 1.0) / 2.0 * (self.mel_max - self.mel_min) + self.mel_min
-        linear_prediction_mels = (linear_prediction_mels + 1.0) / 2.0 * (self.mel_max - self.mel_min) + self.mel_min
+        mels = mels * self.mel_std + self.mel_mean
+        linear_prediction_mels = linear_prediction_mels * self.mel_std + self.mel_mean
 
         return mels, cross_attention_alignments, linear_prediction_mels
 
-class Encoder(torch.nn.Module):
+class Encoder(torch.nn.Module): 
     def __init__(
         self,
         hyper_parameters: Namespace
@@ -499,48 +495,6 @@ class Duration_Positional_Encoding(torch.nn.Embedding):
     def get_pe(x: torch.Tensor, pe: torch.Tensor):
         pe = pe.repeat(1, 1, math.ceil(x.size(2) / pe.size(2))) 
         return pe[:, :, :x.size(2)]
-
-class Token_Predictor(torch.nn.Module): 
-    def __init__(
-        self,
-        hyper_parameters: Namespace
-        ):
-        super().__init__()
-        self.hp = hyper_parameters
-        
-        self.lstm = torch.nn.LSTM(
-            input_size= self.hp.Encoder.Size,
-            hidden_size= self.hp.Token_Predictor.Size,
-            num_layers= self.hp.Token_Predictor.LSTM.Stack,
-            )
-        self.lstm_dropout = torch.nn.Dropout(
-            p= self.hp.Token_Predictor.LSTM.Dropout_Rate,
-            )
-
-        self.projection = Conv_Init(torch.nn.Conv1d(
-            in_channels= self.hp.Token_Predictor.Size,
-            out_channels= self.hp.Tokens + 1,
-            kernel_size= 1,
-            ), w_init_gain= 'linear')
-            
-    def forward(
-        self,
-        encodings: torch.Tensor,
-        ) -> torch.Tensor:
-        '''
-        features: [Batch, Feature_d, Feature_t], Spectrogram
-        lengths: [Batch]
-        '''
-        encodings = encodings.permute(2, 0, 1)    # [Feature_t, Batch, Enc_d]
-        
-        self.lstm.flatten_parameters()
-        encodings = self.lstm(encodings)[0] # [Feature_t, Batch, LSTM_d]
-        
-        predictions = self.projection(encodings.permute(1, 2, 0))
-        predictions = torch.nn.functional.log_softmax(predictions, dim= 1)
-
-        return predictions
-
 
 def Length_Regulate(
     durations: torch.IntTensor,

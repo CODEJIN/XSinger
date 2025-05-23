@@ -122,7 +122,7 @@ class CFM(torch.nn.Module):
 
         return mels
     
-    @torch.compile
+    # @torch.compile
     def OT_CFM_Sampling(
         self,
         mels: torch.FloatTensor,

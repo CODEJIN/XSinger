@@ -190,14 +190,13 @@ class Trainer:
 
     def Model_Generate(self):
         mel_dict = yaml.load(open(self.hp.Mel_Info_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
-        mel_min, mel_max = zip(*[(x['Min'], x['Max']) for x in mel_dict.values()])
-        mel_min, mel_max = min(mel_min), max(mel_max)
+        mel_mean, mel_std = mel_dict['Total']['Mean'], mel_dict['Total']['Std']
 
         self.model_dict = {
             'RectifiedFlowSVS': RectifiedFlowSVS(
                 hyper_parameters= self.hp,
-                mel_min= mel_min,
-                mel_max= mel_max
+                mel_mean= mel_mean,
+                mel_std= mel_std
                 ).to(self.device)
             }
         self.model_dict['RectifiedFlowSVS_EMA'] = torch.optim.swa_utils.AveragedModel(
@@ -254,7 +253,7 @@ class Trainer:
         with self.accelerator.accumulate(self.model_dict['RectifiedFlowSVS']):
             flows, prediction_flows, \
             target_mels, prediction_mels, \
-            cross_attention_alignments, prediction_tokens = self.model_dict['RectifiedFlowSVS'](
+            cross_attention_alignments = self.model_dict['RectifiedFlowSVS'](
                 tokens= tokens,
                 languages= languages,
                 token_lengths= token_lengths,
@@ -287,19 +286,12 @@ class Trainer:
                 # query_lengths= mel_lengths,
                 # key_lengths= token_lengths
                 )
-            loss_dict['Token'] = self.criterion_dict['TokenCTC'](
-                log_probs= prediction_tokens.permute(2, 0, 1),  # [Latent_t, Batch, Token_n]
-                targets= tokens,
-                input_lengths= mel_lengths,
-                target_lengths= token_lengths
-                )
             
             self.optimizer_dict['RectifiedFlowSVS'].zero_grad()
             self.accelerator.backward(
                 loss_dict['CFM'] +
                 loss_dict['Encoding'] +
-                loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention +
-                loss_dict['Token']
+                loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention
                 )
 
             if self.hp.Train.Gradient_Norm > 0.0:
@@ -393,7 +385,7 @@ class Trainer:
         loss_dict = {}
         flows, prediction_flows, \
         target_mels, prediction_mels, \
-        cross_attention_alignments, prediction_tokens = self.model_dict['RectifiedFlowSVS'](
+        cross_attention_alignments = self.model_dict['RectifiedFlowSVS'](
             tokens= tokens,
             languages= languages,
             token_lengths= token_lengths,
@@ -426,13 +418,7 @@ class Trainer:
             # query_lengths= mel_lengths,
             # key_lengths= token_lengths
             )
-        loss_dict['Token'] = self.criterion_dict['TokenCTC'](
-            log_probs= prediction_tokens.permute(2, 0, 1),  # [Latent_t, Batch, Token_n]
-            targets= tokens,
-            input_lengths= mel_lengths,
-            target_lengths= token_lengths
-            )
-
+        
         for tag, loss in loss_dict.items():
             self.scalar_dict['Evaluation']['Loss/{}'.format(tag)] += loss.item()
 
