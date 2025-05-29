@@ -42,13 +42,24 @@ Encoder:
         FFN:
             Kernel_Size: 7
             Dropout_Rate: 0.1
-    Prior_Encoder:
-        Stack: 4
-        Head: 2
+
+F0_Predictor:
+    Size: 128
+    Scheduler: 'Uniform' # 'Cosmap'
+    Kernel_Size: 3
+    Stack: 10
+    Dilation_Cycle: 4
+    Use_CFG: false
+    Use_OT: false
+
+
+Prior_Encoder:
+    Stack: 4
+    Head: 2
+    Dropout_Rate: 0.1
+    FFN:
+        Kernel_Size: 7
         Dropout_Rate: 0.1
-        FFN:
-            Kernel_Size: 7
-            Dropout_Rate: 0.1
 
 CFM:
     Size: 512
