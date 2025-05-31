@@ -49,47 +49,44 @@ F0_Predictor:
     Kernel_Size: 3
     Stack: 10
     Dilation_Cycle: 4
-    Use_CFG: false
-    Use_OT: false
-
+    Use_CFG: true
+    Use_OT: true
+    Coarse_Bin: 256
 
 Prior_Encoder:
-    Stack: 4
-    Head: 2
-    Dropout_Rate: 0.1
-    FFN:
-        Kernel_Size: 7
-        Dropout_Rate: 0.1
-
-CFM:
-    Size: 512
-    Scheduler: 'Uniform' # 'Cosmap'
-    Transformer:
-        Stack: 6
-        Head: 2
-        Dropout_Rate: 0.1
-        FFN:
-            Kernel_Size: 3
-            Dropout_Rate: 0.1
-    Use_OT: true
-    Use_CFG: true
+    Stack: 8
+    Kernel_Size: 5
+    Projection_Kernel_Size: 3
+    
+# CFM:
+#     Size: 512
+#     Scheduler: 'Uniform' # 'Cosmap'
+#     Transformer:
+#         Stack: 6
+#         Head: 2
+#         Dropout_Rate: 0.1
+#         FFN:
+#             Kernel_Size: 3
+#             Dropout_Rate: 0.1
+#     Use_OT: true
+#     Use_CFG: true
 
 
-Token_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Token.yaml'
-Mel_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Mel_Info.yaml'
-F0_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/F0_Info.yaml'
-Singer_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Singer_Info.yaml'
-Genre_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Genre_Info.yaml'
-Language_Info_Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Language_Info.yaml'
+Token_Path: './Pattern/Token.yaml'
+Mel_Info_Path: './Pattern/Mel_Info.yaml'
+F0_Info_Path: './Pattern/F0_Info.yaml'
+Singer_Info_Path: './Pattern/Singer_Info.yaml'
+Genre_Info_Path: './Pattern/Genre_Info.yaml'
+Language_Info_Path: './Pattern/Language_Info.yaml'
 Train:
     Pattern_Cache: false
     Train_Pattern:
-        Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Train'
+        Path: './Pattern/Train'
         Metadata_File: 'METADATA.PICKLE'
         Accumulated_Dataset_Epoch: 100 # This is to prevent slow down from torch.utils.data.DataLoader when the number of patterns is small.
         Augmentation_Ratio: 0.10
     Eval_Pattern:
-        Path: '/mnt/f/Datasets/24K.RectifiedFlowSVS.Mel/Eval'
+        Path: './Pattern/Eval'
         Metadata_File: 'METADATA.PICKLE'
         Accumulated_Dataset_Epoch: 4   # When singer is 1, evaluation pattern is also 1. Because offset is selected randomly, this is meaningful.
     Num_Workers: 2
@@ -101,7 +98,7 @@ Train:
     Learning_Rate:
         Initial: 1.0e-4
         Decay: 0.999875
-        Decay_Epoch: 1
+        Decay_Epoch: 1000
         Lambda:
             Cross_Attention: 10.0
             Optimal_Transport: 0.5
@@ -154,7 +151,7 @@ Log_Path: './results/Log'
 
 Weights_and_Biases:
     Use: false
-    Project: 'RectifiedFlowSVS'
+    Project: 'TechSinger_Linear'
     Entity: 'codejin'
     Name: 'Test'
     Save_Checkpoint:

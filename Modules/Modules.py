@@ -3,29 +3,33 @@ import torch
 import math
 from typing import Union, List, Optional, Tuple
 
-from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Norm_Type
-from .CFM import CFM
+from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Norm_Type, Lambda
+from .RectifiedFlow_F0 import RectifiedFlow as F0_Predictor
 
-class RectifiedFlowSVS(torch.nn.Module):
+class TechSinger_Linear(torch.nn.Module):
     def __init__(
         self,
         hyper_parameters: Namespace,
         mel_mean: float,
         mel_std: float,
+        f0_mean: float,
+        f0_std: float,
         ):
         super().__init__()
         self.hp = hyper_parameters
         self.mel_mean = mel_mean
         self.mel_std = mel_std
+        self.f0_mean = f0_mean
+        self.f0_std = f0_std
 
         self.encoder = Encoder(self.hp)
-        self.linear_projection = Conv_Init(torch.nn.Conv1d(
-            in_channels= self.hp.Encoder.Size,
-            out_channels= self.hp.Sound.N_Mel,
-            kernel_size= 1
-            ), w_init_gain= 'linear')
-
-        self.cfm = CFM(self.hp)
+        self.f0_predictor = F0_Predictor(self.hp)
+        self.f0_embedding = torch.nn.Embedding(
+            num_embeddings= self.hp.F0_Predictor.Coarse_Bin,
+            embedding_dim= self.hp.Encoder.Size
+            )
+        
+        self.prior_encoder = Prior_Encoder(self.hp)
 
     def forward(
         self,
@@ -38,11 +42,13 @@ class RectifiedFlowSVS(torch.nn.Module):
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         mels: torch.FloatTensor,
+        f0s: torch.FloatTensor,
         mel_lengths: torch.IntTensor,
         ):
-        target_mels = (mels - self.mel_mean) / self.mel_std
+        normalized_mels = (mels - self.mel_mean) / self.mel_std
+        normalized_f0s = (f0s - self.f0_mean) / self.f0_std
 
-        encodings, singers, cross_attention_alignments = self.encoder(
+        encodings, singers, cross_attention_alignments, _ = self.encoder(
             tokens= tokens,
             languages= languages,
             token_lengths= token_lengths,
@@ -53,20 +59,25 @@ class RectifiedFlowSVS(torch.nn.Module):
             singers= singers,
             mel_lengths= mel_lengths
             )    # [Batch, Enc_d, Dec_t], [Batch, Enc_d, Dec_t], [Batch, Dec_t, Token_t]
-        linear_prediction_mels = self.linear_projection(encodings)
-
-        flows, prediction_flows = self.cfm(
-            encodings= linear_prediction_mels,
-            singers= singers,
-            mels= target_mels,
-            lengths= mel_lengths,
+        
+        f0_flows, prediction_f0_flows = self.f0_predictor(
+            encodings= encodings,
+            f0s= normalized_f0s
+            )   # [Batch, Dec_t], [Batch, Dec_t]
+        f0s_coarse = self.F0_Coarse(
+            f0s= f0s
+            )   # [Batch, Dec_t]
+        f0_encodings = self.f0_embedding(f0s_coarse).mT # [Batch, Enc_d, Dec_t]
+        
+        prediction_mels = self.prior_encoder(
+            encodings= encodings + f0_encodings,
+            lengths= mel_lengths
             )
 
         return \
-            flows, prediction_flows, \
-            target_mels, linear_prediction_mels, \
+            normalized_mels, prediction_mels, \
+            f0_flows, prediction_f0_flows, \
             cross_attention_alignments
-            
     
     def Inference(
         self,
@@ -79,9 +90,9 @@ class RectifiedFlowSVS(torch.nn.Module):
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         mel_lengths: torch.IntTensor,
-        cfm_steps: int= 16
+        rectifiedflow_steps: int= 100
         ):
-        encodings, singers, cross_attention_alignments = self.encoder(
+        encodings, singers, cross_attention_alignments, notes_expanded = self.encoder(
             tokens= tokens,
             languages= languages,
             token_lengths= token_lengths,
@@ -93,19 +104,46 @@ class RectifiedFlowSVS(torch.nn.Module):
             mel_lengths= mel_lengths
             )    # [Batch, Enc_d, Enc_t], [Batch, Enc_d, Dec_t]
         
-        linear_prediction_mels = self.linear_projection(encodings)
-
-        mels = self.cfm.Inference(
-            encodings= linear_prediction_mels,
-            singers= singers,
-            lengths= mel_lengths,
-            steps= cfm_steps,
-            )
+        normalized_f0s = self.f0_predictor.Inference(
+            encodings= encodings,
+            steps= rectifiedflow_steps
+            )        
+        f0s = (normalized_f0s * self.f0_std + self.f0_mean).clamp_min(0.0)
+        # need dynamic clipping
+        f0s_lower_bound = (440 * 2 ** ((notes_expanded - 3 - 69) / 12))
+        f0s_lower_bound = torch.where(notes_expanded > 0, f0s_lower_bound, torch.zeros_like(f0s_lower_bound))
+        f0s_upper_bound = 440 * 2 ** ((notes_expanded + 3 - 69) / 12)
+        f0s = torch.where(f0s < f0s_lower_bound, f0s_lower_bound, f0s)
+        f0s = torch.where(f0s > f0s_upper_bound, f0s_upper_bound, f0s)                
+        f0s_coarse = self.F0_Coarse(
+            f0s= f0s
+            )   # [Batch, Dec_t]
+        f0_encodings = self.f0_embedding(f0s_coarse).mT
         
-        mels = mels * self.mel_std + self.mel_mean
-        linear_prediction_mels = linear_prediction_mels * self.mel_std + self.mel_mean
+        prediction_mels = self.prior_encoder(
+            encodings= encodings + f0_encodings,
+            lengths= mel_lengths
+            )
+        prediction_mels = prediction_mels * self.mel_std + self.mel_mean
 
-        return mels, cross_attention_alignments, linear_prediction_mels
+        return prediction_mels, f0s, cross_attention_alignments
+
+    def F0_Coarse(
+        self,
+        f0s: torch.FloatTensor
+        ) -> torch.IntTensor:
+        f0_min_mel = 1127.0 * math.log(1.0 + self.hp.Sound.F0_Min / 700.0)
+        f0_max_mel = 1127.0 * math.log(1.0 + self.hp.Sound.F0_Max / 700.0)        
+        f0s_mel = 1127.0 * (1.0 + f0s / 700.0).log()
+        
+        f0s_mel[f0s_mel > 0.0] = (f0s_mel[f0s_mel > 0.0] - f0_min_mel) / (f0_max_mel - f0_min_mel) * (self.hp.F0_Predictor.Coarse_Bin - 1)  # 0 to Bin-1
+        f0s_mel = f0s_mel.clamp(min= 0.0, max= self.hp.F0_Predictor.Coarse_Bin - 1)
+        
+        f0s_coarse = (f0s_mel + 0.5).int()
+        
+        return f0s_coarse
+        
+        
 
 class Encoder(torch.nn.Module): 
     def __init__(
@@ -125,7 +163,6 @@ class Encoder(torch.nn.Module):
         self.melody_encoder = Melody_Encoder(self.hp)
         self.phoneme_to_note_encoder = Phoneme_to_Note_Encoder(self.hp)
         self.phoneme_to_note_cross_encoder = Phoneme_to_Note_Cross_Encoder(self.hp)
-        self.prior_encoder = Prior_Encoder(self.hp)
 
     def forward(
         self,
@@ -138,7 +175,7 @@ class Encoder(torch.nn.Module):
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         mel_lengths: torch.IntTensor
-        ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.IntTensor]:
         '''
         tokens: [Batch, Enc_t]
         languages: [Batch, Enc_t]
@@ -182,14 +219,11 @@ class Encoder(torch.nn.Module):
             )
 
         singers = singers @ token_to_note_alignments @ note_to_decoding_alignments  # [Batch, Enc_d, Dec_t]
-
-        encodings: torch.FloatTensor = self.prior_encoder(
-            encodings= encodings,
-            singers= singers,
-            lengths= mel_lengths
-            )   # [Batch, Enc_d, Dec_t]
+        
+        notes_expaned = notes[:, None, :].to(note_to_decoding_alignments.dtype) @ note_to_decoding_alignments
+        notes_expaned = notes_expaned[:, 0, :].to(notes.dtype)  # [Batch, Dec_t], for f0 correction.
   
-        return encodings, singers, cross_attention_alignments   # singer: using in cfm as a condition.
+        return encodings, singers, cross_attention_alignments, notes_expaned
 
 class Lyric_Encoder(torch.nn.Module):
     def __init__(
@@ -429,21 +463,25 @@ class Prior_Encoder(torch.nn.Module):
         self.hp = hyper_parameters
         
         self.blocks = torch.nn.ModuleList([
-            FFT_Block(
+            Prior_Residual_Block(
                 channels= self.hp.Encoder.Size,
-                num_head= self.hp.Encoder.Prior_Encoder.Head,
-                ffn_kernel_size= self.hp.Encoder.Prior_Encoder.FFN.Kernel_Size,
-                ffn_dropout_rate= self.hp.Encoder.Prior_Encoder.FFN.Dropout_Rate,
-                norm_type= Norm_Type.Conditional_LayerNorm if index == 0 else Norm_Type.LayerNorm,
-                layer_norm_condition_channels= self.hp.Encoder.Size if index == 0 else None
+                kernel_size= self.hp.Prior_Encoder.Kernel_Size,
+                dilation= 1
                 )
-            for index in range(self.hp.Encoder.Prior_Encoder.Stack)
-            ])  # real type: torch.nn.ModuleList[FFT_BLock]
+            for _ in range(self.hp.Prior_Encoder.Stack)
+            ])        
+        
+        self.norm = torch.nn.LayerNorm(self.hp.Encoder.Size)
+        self.projection = Conv_Init(torch.nn.Conv1d(
+            in_channels= self.hp.Encoder.Size,
+            out_channels= self.hp.Sound.N_Mel,
+            kernel_size= self.hp.Prior_Encoder.Projection_Kernel_Size,
+            padding = (self.hp.Prior_Encoder.Projection_Kernel_Size - 1) // 2,
+            ), w_init_gain= 'linear')
 
     def forward(
         self,
         encodings: torch.FloatTensor,
-        singers: torch.FloatTensor,
         lengths: torch.IntTensor
         ) -> torch.FloatTensor:
         '''
@@ -453,12 +491,60 @@ class Prior_Encoder(torch.nn.Module):
         for block in self.blocks:
             encodings = block(
                 x= encodings,
-                lengths= lengths,
-                layer_norm_conditions= singers
+                lengths= lengths                
                 )
+        encodings = self.norm(encodings.mT).mT
+        mels = self.projection(encodings)
 
-        return encodings
+        return mels
 
+class Prior_Residual_Block(torch.nn.Module):
+    def __init__(
+        self,
+        channels: int,
+        kernel_size: int,
+        dilation: int
+        ):
+        super().__init__()
+        self.rescaler = kernel_size ** -0.5
+        
+        self.norm = torch.nn.LayerNorm(channels)
+        self.conv_0 = Conv_Init(torch.nn.Conv1d(
+            in_channels= channels,
+            out_channels= channels * 2,
+            kernel_size= kernel_size,
+            padding = dilation * (kernel_size - 1) // 2,
+            dilation= dilation,
+            ), w_init_gain= 'gelu')
+        
+        self.gelu = torch.nn.GELU(approximate= 'tanh')
+        self.conv_1 = Conv_Init(torch.nn.Conv1d(
+            in_channels= channels * 2,
+            out_channels= channels,
+            kernel_size= 1,
+            dilation= dilation,
+            ), w_init_gain= 'linear')
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        lengths: torch.Tensor
+        ):
+        masks = None
+        float_masks = 1.0
+        if not lengths is None:
+            masks = Mask_Generate(lengths= lengths, max_length= x.size(2))    # [Batch, Time]
+            float_masks = (~masks)[:, None].float()   # float mask, [Batch, 1, X_t]
+        
+        residuals = x
+        
+        x = self.norm(x.mT).mT * float_masks
+        x = self.conv_0(x) * float_masks
+        x = self.gelu(x * self.rescaler) * float_masks
+        x = self.conv_1(x) * float_masks
+        x = (x + residuals) * float_masks
+        
+        return x
 
 # https://pytorch.org/tutorials/beginner/transformer_tutorial.html
 # https://github.com/soobinseo/Transformer-TTS/blob/master/network.py

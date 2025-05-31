@@ -2095,4 +2095,4 @@ if __name__ == '__main__':
 #   -amb /mnt/e/177.다음색 가이드보컬 데이터 \
 #   -verbose
 
-# python -m Pattern_Generator -hp Hyper_Parameters.yaml -csd /mnt/f/Rawdata_Music/CSD_1.1/korean
+# python -m Pattern_Generator -hp Hyper_Parameters.yaml -csd /large_dataset/rawdata_music/CSD_1.1/korean

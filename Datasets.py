@@ -77,6 +77,13 @@ def Mel_Stack(mels: List[np.ndarray], max_length: Optional[int]= None):
         )
     return mels
 
+def F0_Stack(f0s: List[np.ndarray], max_length: Optional[int]= None):
+    max_f0_length = max_length or max([f0.shape[0] for f0 in f0s])
+    f0s = np.stack(
+        [np.pad(f0, [0, max_f0_length - f0.shape[0]], constant_values= 0.0) for f0 in f0s],
+        axis= 0
+        )
+    return f0s
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(
@@ -130,10 +137,11 @@ class Dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         token_combination, token_on_note_length_combination, \
         note_combination, duration_combination, \
-        singer_combination, language_combination, mel_combination = [], [], [], [], [], [], []
+        singer_combination, language_combination, \
+        mel_combination, f0_combination = [], [], [], [], [], [], [], []
 
         for sample_pattern in [self.patterns[idx]] + list(sample(self.patterns, self.num_combination - 1)):
-            token, token_on_note_length, note, duration, singer, language, mel = self.Pattern_LRU_Cache(
+            token, token_on_note_length, note, duration, singer, language, mel, f0 = self.Pattern_LRU_Cache(
                 os.path.join(self.pattern_path, sample_pattern).replace('\\', '/')
                 )
             
@@ -160,6 +168,7 @@ class Dataset(torch.utils.data.Dataset):
             singer = [singer] * len(token)
             language = [language] * len(token)
             mel = mel[:, mel_offset_start:mel_offset_end]
+            f0 = f0[mel_offset_start:mel_offset_end]
 
             token_combination.extend(token)
             token_on_note_length_combination.extend(token_on_note_length)
@@ -168,13 +177,16 @@ class Dataset(torch.utils.data.Dataset):
             singer_combination.extend(singer)
             language_combination.extend(language)
             mel_combination.append(mel)
+            f0_combination.append(f0)
 
         mel_combination = np.concatenate(mel_combination, axis= 1)
+        f0_combination = np.concatenate(f0_combination, axis= 0)
         
         return \
             token_combination, token_on_note_length_combination, \
             note_combination, duration_combination, \
-            singer_combination, language_combination, mel_combination
+            singer_combination, language_combination, \
+            mel_combination, f0_combination
     
     def Pattern_LRU_Cache(self, path: str):
         pattern_dict = pickle.load(open(path, 'rb'))
@@ -187,8 +199,9 @@ class Dataset(torch.utils.data.Dataset):
         singer = self.singer_dict[pattern_dict['Singer']]
         language = self.language_dict[pattern_dict['Language']]
         mel = pattern_dict['Mel']
+        f0 = pattern_dict['F0']
         
-        return token, token_on_note_length, note, duration, singer, language, mel
+        return token, token_on_note_length, note, duration, singer, language, mel, f0
 
     def __len__(self):
         return len(self.patterns)
@@ -263,7 +276,7 @@ class Collater:
         self.token_dict = token_dict
 
     def __call__(self, batch):
-        tokens, token_on_note_lengths, notes, durations, singers, languages, mels = zip(*batch)
+        tokens, token_on_note_lengths, notes, durations, singers, languages, mels, f0s = zip(*batch)
         
         token_lengths = np.array([len(token) for token in tokens])
         note_lengths = np.array([len(note) for note in notes])
@@ -276,6 +289,7 @@ class Collater:
         singers = Singer_Stack(singers)
         languages = Language_Stack(languages)
         mels = Mel_Stack(mels)
+        f0s = F0_Stack(f0s)
 
         tokens = torch.IntTensor(tokens)   # [Batch, Token_t]
         token_lengths = torch.IntTensor(token_lengths)  # [Batch]
@@ -289,13 +303,14 @@ class Collater:
         languages = torch.IntTensor(languages)  # [Batch, Token_t]
 
         mels = torch.FloatTensor(mels)  # [Batch, N_Mel, Mel_t]
+        f0s = torch.FloatTensor(f0s)  # [Batch, N_Mel, Mel_t]
         mel_lengths = torch.IntTensor(mel_lengths)    # [Batch]
         
         return \
             tokens, token_lengths, token_on_note_lengths, \
             notes, durations, note_lengths, \
             singers, languages, \
-            mels, mel_lengths
+            mels, f0s, mel_lengths
 
 class Inference_Collater:
     def __init__(self,

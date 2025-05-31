@@ -15,7 +15,7 @@ from accelerate import DistributedDataParallelKwargs
 from Logger import Logger
 from typing import List
 
-from Modules.Modules import RectifiedFlowSVS, Mask_Generate, Length_Regulate
+from Modules.Modules import TechSinger_Linear, Mask_Generate, Length_Regulate
 from Datasets import Dataset, Inference_Dataset, Collater, Inference_Collater
 from Modules.Guided_Attention_Hard import Guided_Attention_Loss
 # from Modules.Guided_Attention_Soft import Guided_Attention_Loss
@@ -74,15 +74,15 @@ class Trainer:
         self.Model_Generate()
         
         self.dataloader_dict['Train'], self.dataloader_dict['Eval'], self.dataloader_dict['Inference'], \
-        self.model_dict['RectifiedFlowSVS'], self.model_dict['RectifiedFlowSVS_EMA'], \
-        self.optimizer_dict['RectifiedFlowSVS'], self.scheduler_dict['RectifiedFlowSVS'] = self.accelerator.prepare(
+        self.model_dict['TechSinger_Linear'], self.model_dict['TechSinger_Linear_EMA'], \
+        self.optimizer_dict['TechSinger_Linear'], self.scheduler_dict['TechSinger_Linear'] = self.accelerator.prepare(
             self.dataloader_dict['Train'],
             self.dataloader_dict['Eval'],
             self.dataloader_dict['Inference'],
-            self.model_dict['RectifiedFlowSVS'],
-            self.model_dict['RectifiedFlowSVS_EMA'],
-            self.optimizer_dict['RectifiedFlowSVS'],
-            self.scheduler_dict['RectifiedFlowSVS'],
+            self.model_dict['TechSinger_Linear'],
+            self.model_dict['TechSinger_Linear_EMA'],
+            self.optimizer_dict['TechSinger_Linear'],
+            self.scheduler_dict['TechSinger_Linear'],
             )
         
         self.Load_Checkpoint()
@@ -105,7 +105,7 @@ class Trainer:
                     name= self.hp.Weights_and_Biases.Name,
                     config= To_Non_Recursive_Dict(self.hp)
                     )
-                wandb.watch(self.model_dict['RectifiedFlowSVS'])
+                wandb.watch(self.model_dict['TechSinger_Linear'])
 
     def Dataset_Generate(self):
         token_dict = yaml.load(open(self.hp.Token_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
@@ -190,20 +190,24 @@ class Trainer:
 
     def Model_Generate(self):
         mel_dict = yaml.load(open(self.hp.Mel_Info_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
+        f0_dict = yaml.load(open(self.hp.F0_Info_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)        
         mel_mean, mel_std = mel_dict['Total']['Mean'], mel_dict['Total']['Std']
+        f0_mean, f0_std = f0_dict['Total']['Mean'], mel_dict['Total']['Std']
 
         self.model_dict = {
-            'RectifiedFlowSVS': RectifiedFlowSVS(
+            'TechSinger_Linear': TechSinger_Linear(
                 hyper_parameters= self.hp,
                 mel_mean= mel_mean,
-                mel_std= mel_std
+                mel_std= mel_std,
+                f0_mean= f0_mean,
+                f0_std= f0_std
                 ).to(self.device)
             }
-        self.model_dict['RectifiedFlowSVS_EMA'] = torch.optim.swa_utils.AveragedModel(
-            self.model_dict['RectifiedFlowSVS'],
+        self.model_dict['TechSinger_Linear_EMA'] = torch.optim.swa_utils.AveragedModel(
+            self.model_dict['TechSinger_Linear'],
             multi_avg_fn= torch.optim.swa_utils.get_ema_multi_avg_fn(0.9999)
             )
-        self.model_dict['RectifiedFlowSVS_EMA'].Inference = self.model_dict['RectifiedFlowSVS_EMA'].module.Inference
+        self.model_dict['TechSinger_Linear_EMA'].Inference = self.model_dict['TechSinger_Linear_EMA'].module.Inference
 
         self.criterion_dict = {
             'MSE': torch.nn.MSELoss(reduction= 'none').to(self.device),
@@ -215,8 +219,8 @@ class Trainer:
             }
 
         self.optimizer_dict = {
-            'RectifiedFlowSVS': torch.optim.AdamW(
-                params= self.model_dict['RectifiedFlowSVS'].parameters(),
+            'TechSinger_Linear': torch.optim.AdamW(
+                params= self.model_dict['TechSinger_Linear'].parameters(),
                 lr= self.hp.Train.Learning_Rate.Initial,
                 betas=(self.hp.Train.ADAM.Beta1, self.hp.Train.ADAM.Beta2),
                 eps= self.hp.Train.ADAM.Epsilon,
@@ -224,8 +228,8 @@ class Trainer:
                 )
             }
         self.scheduler_dict = {
-            'RectifiedFlowSVS': torch.optim.lr_scheduler.ExponentialLR(
-                optimizer= self.optimizer_dict['RectifiedFlowSVS'],
+            'TechSinger_Linear': torch.optim.lr_scheduler.ExponentialLR(
+                optimizer= self.optimizer_dict['TechSinger_Linear'],
                 gamma= self.hp.Train.Learning_Rate.Decay,
                 last_epoch= -1
                 )
@@ -234,7 +238,7 @@ class Trainer:
         self.vocoder = torch.jit.load('BigVGAN_24K_100band_256x.pts', map_location= 'cpu').to(self.device)
         
         # if self.accelerator.is_main_process:
-        #     logging.info(self.model_dict['RectifiedFlowSVS'])
+        #     logging.info(self.model_dict['TechSinger_Linear'])
 
     def Train_Step(
         self,
@@ -246,14 +250,15 @@ class Trainer:
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         languages: torch.IntTensor,
-        mels: torch.IntTensor,
+        mels: torch.FloatTensor,
+        f0s: torch.FloatTensor,
         mel_lengths: torch.IntTensor,
         ):
         loss_dict = {}
-        with self.accelerator.accumulate(self.model_dict['RectifiedFlowSVS']):
-            flows, prediction_flows, \
+        with self.accelerator.accumulate(self.model_dict['TechSinger_Linear']):
             target_mels, prediction_mels, \
-            cross_attention_alignments = self.model_dict['RectifiedFlowSVS'](
+            f0_flows, prediction_f0_flows, \
+            cross_attention_alignments = self.model_dict['TechSinger_Linear'](
                 tokens= tokens,
                 languages= languages,
                 token_lengths= token_lengths,
@@ -263,6 +268,7 @@ class Trainer:
                 note_lengths= note_lengths,
                 singers= singers,
                 mels= mels,
+                f0s= f0s,
                 mel_lengths= mel_lengths
                 )
             
@@ -271,14 +277,14 @@ class Trainer:
                 max_length= mels.size(2)
                 ).to(mels.device)).float()
             
-            loss_dict['CFM'] = (self.criterion_dict['MSE'](
-                prediction_flows,
-                flows,
-                ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_flows.size(1)            
             loss_dict['Encoding'] = (self.criterion_dict['MSE'](
                 prediction_mels,
                 target_mels,
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
+            loss_dict['RectifiedFlow_F0'] = (self.criterion_dict['MSE'](
+                prediction_f0_flows,
+                f0_flows,
+                ) * mel_float_masks).sum() / mel_float_masks.sum() / prediction_f0_flows.size(1)            
             loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
                 alignments= cross_attention_alignments,
                 token_on_note_lengths= token_on_note_lengths,
@@ -287,24 +293,24 @@ class Trainer:
                 # key_lengths= token_lengths
                 )
             
-            self.optimizer_dict['RectifiedFlowSVS'].zero_grad()
+            self.optimizer_dict['TechSinger_Linear'].zero_grad()
             self.accelerator.backward(
-                loss_dict['CFM'] +
+                loss_dict['RectifiedFlow_F0'] +
                 loss_dict['Encoding'] +
                 loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention
                 )
 
             if self.hp.Train.Gradient_Norm > 0.0:
                 self.accelerator.clip_grad_norm_(
-                    parameters= self.model_dict['RectifiedFlowSVS'].parameters(),
+                    parameters= self.model_dict['TechSinger_Linear'].parameters(),
                     max_norm= self.hp.Train.Gradient_Norm
                     )
 
-            self.optimizer_dict['RectifiedFlowSVS'].step()
+            self.optimizer_dict['TechSinger_Linear'].step()
             if self.num_gpus > 1:
-                self.model_dict['RectifiedFlowSVS_EMA'].module.update_parameters(self.model_dict['RectifiedFlowSVS'])
+                self.model_dict['TechSinger_Linear_EMA'].module.update_parameters(self.model_dict['TechSinger_Linear'])
             else:
-                self.model_dict['RectifiedFlowSVS_EMA'].update_parameters(self.model_dict['RectifiedFlowSVS'])
+                self.model_dict['TechSinger_Linear_EMA'].update_parameters(self.model_dict['TechSinger_Linear'])
 
             self.steps += 1
             if self.accelerator.is_main_process:
@@ -317,7 +323,7 @@ class Trainer:
         for tokens, token_lengths, token_on_note_lengths, \
             notes, durations, note_lengths, \
             singers, languages, \
-            mels, mel_lengths in self.dataloader_dict['Train']:
+            mels, f0s, mel_lengths in self.dataloader_dict['Train']:
             self.Train_Step(
                 tokens= tokens,
                 token_lengths= token_lengths,
@@ -328,6 +334,7 @@ class Trainer:
                 singers= singers,
                 languages= languages,
                 mels= mels,
+                f0s= f0s,
                 mel_lengths= mel_lengths,
                 )
 
@@ -336,7 +343,7 @@ class Trainer:
                 self.hp.Train.Train_Pattern.Accumulated_Dataset_Epoch /
                 self.hp.Train.Batch_Size / self.num_gpus
                 ) * self.hp.Train.Learning_Rate.Decay_Epoch) == 0:
-                self.scheduler_dict['RectifiedFlowSVS'].step()
+                self.scheduler_dict['TechSinger_Linear'].step()
 
             if self.steps % self.hp.Train.Checkpoint_Save_Interval == 0:
                 self.Save_Checkpoint()
@@ -346,7 +353,7 @@ class Trainer:
                     tag: loss / self.hp.Train.Logging_Interval
                     for tag, loss in self.scalar_dict['Train'].items()
                     }
-                self.scalar_dict['Train']['Learning_Rate'] = self.scheduler_dict['RectifiedFlowSVS'].get_last_lr()[0]
+                self.scalar_dict['Train']['Learning_Rate'] = self.scheduler_dict['TechSinger_Linear'].get_last_lr()[0]
                 self.writer_dict['Train'].add_scalar_dict(self.scalar_dict['Train'], self.steps)
                 if self.hp.Weights_and_Biases.Use:
                     wandb.log(
@@ -380,12 +387,13 @@ class Trainer:
         singers: torch.IntTensor,
         languages: torch.IntTensor,
         mels: torch.IntTensor,
+        f0s: torch.IntTensor,
         mel_lengths: torch.IntTensor,
         ):
         loss_dict = {}
-        flows, prediction_flows, \
         target_mels, prediction_mels, \
-        cross_attention_alignments = self.model_dict['RectifiedFlowSVS'](
+            f0_flows, prediction_f0_flows, \
+            cross_attention_alignments = self.model_dict['TechSinger_Linear'](
             tokens= tokens,
             languages= languages,
             token_lengths= token_lengths,
@@ -395,6 +403,7 @@ class Trainer:
             note_lengths= note_lengths,
             singers= singers,
             mels= mels,
+            f0s= f0s,
             mel_lengths= mel_lengths
             )
         
@@ -403,14 +412,14 @@ class Trainer:
             max_length= mels.size(2)
             ).to(mels.device)).float()
         
-        loss_dict['CFM'] = (self.criterion_dict['MSE'](
-            prediction_flows,
-            flows,
-            ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_flows.size(1)
         loss_dict['Encoding'] = (self.criterion_dict['MSE'](
                 prediction_mels,
                 target_mels,
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
+        loss_dict['RectifiedFlow_F0'] = (self.criterion_dict['MSE'](
+                prediction_f0_flows,
+                f0_flows,
+                ) * mel_float_masks).sum() / mel_float_masks.sum() / prediction_f0_flows.size(1)            
         loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
             alignments= cross_attention_alignments,
             token_on_note_lengths= token_on_note_lengths,
@@ -439,7 +448,7 @@ class Trainer:
         for step, (
             tokens, token_lengths, token_on_note_lengths,
             notes, durations, note_lengths, singers, languages,
-            mels, mel_lengths
+            mels, f0s, mel_lengths
             ) in dataloader:
             self.Evaluation_Step(
                 tokens= tokens,
@@ -451,6 +460,7 @@ class Trainer:
                 singers= singers,
                 languages= languages,
                 mels= mels,
+                f0s= f0s,
                 mel_lengths= mel_lengths,
                 )
 
@@ -461,17 +471,17 @@ class Trainer:
                 for tag, loss in self.scalar_dict['Evaluation'].items()
                 }
             self.writer_dict['Evaluation'].add_scalar_dict(self.scalar_dict['Evaluation'], self.steps)
-            # self.writer_dict['Evaluation'].add_histogram_model(self.model_dict['RectifiedFlowSVS'], 'RectifiedFlowSVS', self.steps, delete_keywords=[])
+            # self.writer_dict['Evaluation'].add_histogram_model(self.model_dict['TechSinger_Linear'], 'TechSinger_Linear', self.steps, delete_keywords=[])
 
             index = np.random.randint(0, tokens.size(0))
 
             with torch.inference_mode():
                 if self.num_gpus > 1:
-                    inference_func = self.model_dict['RectifiedFlowSVS_EMA'].module.module.Inference
+                    inference_func = self.model_dict['TechSinger_Linear_EMA'].module.module.Inference
                 else:
-                    inference_func = self.model_dict['RectifiedFlowSVS_EMA'].Inference
+                    inference_func = self.model_dict['TechSinger_Linear_EMA'].Inference
 
-                prediction_mels, cross_attention_alignments, encoding_mels = inference_func(
+                prediction_mels, prediction_f0s, cross_attention_alignments = inference_func(
                     tokens= tokens[index, None],
                     languages= languages[index, None],
                     token_lengths= token_lengths[index, None],
@@ -489,6 +499,9 @@ class Trainer:
 
             target_mel = mels[index, :, :mel_length]
             prediction_mel = prediction_mels[0, :, :mel_length]
+            
+            target_f0 = f0s[index, :mel_length].cpu().numpy()
+            prediction_f0 = prediction_f0s[0, :mel_length].cpu().numpy()
 
             target_audio = self.vocoder(target_mel[None])[0].float().clamp(-1.0, 1.0).cpu().numpy()
             prediction_audio = self.vocoder(prediction_mel[None])[0].float().clamp(-1.0, 1.0).cpu().numpy()
@@ -504,14 +517,12 @@ class Trainer:
                 'Mel/Prediction': (prediction_mel, None, 'auto', None, None, None),
                 'Alignment/Score_Alignment': (score_alignment, None, 'auto', None, None, None),
                 'Alignment/Cross_Alignment': (cross_attention_alignment, None, 'auto', None, None, None),
-
-                'Mel/Encoding': (encoding_mels[0, :, :mel_length].cpu().numpy(), None, 'auto', None, None, None),
+                'F0/Target': (target_f0, None, 'auto', None, None, None),
+                'F0/Prediction': (prediction_f0, None, 'auto', None, None, None),
                 }
             audio_dict = {
                 'Audio/Target': (target_audio, self.hp.Sound.Sample_Rate),
-                'Audio/CFM': (prediction_audio, self.hp.Sound.Sample_Rate),
-
-                'Audio/Encoding': (self.vocoder(encoding_mels[0:1, :, :mel_length])[0].float().clamp(-1.0, 1.0).cpu().numpy(), self.hp.Sound.Sample_Rate),
+                'Audio/Prediction': (prediction_audio, self.hp.Sound.Sample_Rate)
                 }
 
             self.writer_dict['Evaluation'].add_image_dict(image_dict, self.steps)
@@ -530,6 +541,13 @@ class Trainer:
                     data= {
                         'Evaluation.Mel.Target': wandb.Image(target_mel),
                         'Evaluation.Mel.Prediction': wandb.Image(prediction_mel),
+                        'Evaluation.F0': wandb.plot.line_series(
+                            xs= np.arange(mel_length),
+                            ys= [target_f0, prediction_f0],
+                            keys= ['Target', 'Prediction'],
+                            title= 'F0',
+                            xname= 'F0_t'
+                            ),
                         'Evaluation.Alignment.Score_Alignment': wandb.Image(score_alignment),
                         'Evaluation.Alignment.Cross_Alignment': wandb.Image(cross_attention_alignment),
                         'Evaluation.Audio.Target': wandb.Audio(
@@ -570,11 +588,11 @@ class Trainer:
         tag_step= False
         ):
         if self.num_gpus > 1:
-            inference_func = self.model_dict['RectifiedFlowSVS_EMA'].module.module.Inference
+            inference_func = self.model_dict['TechSinger_Linear_EMA'].module.module.Inference
         else:
-            inference_func = self.model_dict['RectifiedFlowSVS_EMA'].Inference
+            inference_func = self.model_dict['TechSinger_Linear_EMA'].Inference
 
-        prediction_mels, cross_attention_alignments, _ = inference_func(
+        prediction_mels, prediction_f0s, cross_attention_alignments = inference_func(
             tokens= tokens,
             languages= languages,
             token_lengths= token_lengths,
@@ -599,6 +617,10 @@ class Trainer:
             mel[:, :length]
             for mel, length in zip(prediction_mels.cpu().numpy(), mel_lengths)
             ]
+        prediction_f0s = [
+            f0[:length]
+            for f0, length in zip(prediction_f0s.cpu().numpy(), mel_lengths)
+            ]
         cross_attention_alignments = [
             cross_attention_alignment[:token_length, :mel_length]
             for cross_attention_alignment, mel_length, token_length in zip(
@@ -619,12 +641,14 @@ class Trainer:
         os.makedirs(os.path.join(self.hp.Inference_Path, 'Step-{}'.format(self.steps), 'WAV').replace('\\', '/'), exist_ok= True)
         for index, (
             mel,
+            f0,
             audio,
             alignment,
             lyric,
             file
             ) in enumerate(zip(
             prediction_mels,
+            prediction_f0s,
             prediction_audios,
             cross_attention_alignments,
             lyrics,
@@ -633,15 +657,20 @@ class Trainer:
             title = 'Lyric: {}'.format(''.join(lyric).replace('<X>', ' ') if len(lyric) < 50 else ''.join(lyric[:50]).replace('<X>', ' '))
             new_figure = plt.figure(figsize=(20, 5 * 3), dpi=100)
 
-            ax = plt.subplot2grid((3, 1), (0, 0))
+            ax = plt.subplot2grid((4, 1), (0, 0))
             plt.imshow(mel, aspect='auto', origin='lower')
             plt.title(f'Prediction Mel  {title}')
             plt.colorbar(ax= ax)
-            ax = plt.subplot2grid((3, 1), (1, 0))
+            ax = plt.subplot2grid((4, 1), (1, 0))
+            plt.plot(f0)
+            plt.title(f'Prediction F0  {title}')
+            plt.margins(x= 0)
+            plt.colorbar(ax= ax)
+            ax = plt.subplot2grid((4, 1), (2, 0))
             plt.imshow(alignment, aspect='auto', origin='lower')
             plt.title(f'Alignment  {title}')
             plt.colorbar(ax= ax)
-            ax = plt.subplot2grid((3, 1), (2, 0))
+            ax = plt.subplot2grid((4, 1), (3, 0))
             plt.plot(audio)
             plt.title('Prediction Audio    {}'.format(title))
             plt.margins(x= 0)
@@ -710,7 +739,7 @@ class Trainer:
                 ]
             if len(paths) > 0:
                 path = max(paths, key = os.path.getctime)
-                self.steps = int(path.split('_')[1])
+                self.steps = int(path.split('_')[-1])
             else:
                 return  # Initial training
         else:

@@ -44,14 +44,14 @@ class RectifiedFlow(torch.nn.Module):
 
         timesteps = self.timestep_scheduler(
             torch.rand(encodings.size(0), device= encodings.device)
-            )[:, None, None]
+            )[:, None]
 
         if self.hp.F0_Predictor.Use_OT:
             noises = self.OT_CFM_Sampling(f0s)
         else:
-            noises = torch.randn_like(f0s)  # [Batch, Mel_d, Mel_t]
+            noises = torch.randn_like(f0s)  # [Batch, F0_t]
 
-        noised_f0s = timesteps * f0s + (1.0 - timesteps) * noises  # [Batch, Mel_d, Mel_t]
+        noised_f0s = timesteps * f0s + (1.0 - timesteps) * noises  # [Batch, F0_t]
         # Rectified Flow target: v(x_t, t) = x_1 - x_0
         flows = f0s - noises
 
@@ -59,7 +59,7 @@ class RectifiedFlow(torch.nn.Module):
         network_outputs = self.network(
             f0s= noised_f0s,
             encodings= encodings,
-            steps= timesteps[:, 0, 0]  # [Batch]
+            steps= timesteps[:, 0]  # [Batch]
             )
         prediction_flows = network_outputs
 
@@ -87,7 +87,7 @@ class RectifiedFlow(torch.nn.Module):
         delta_timesteps_list = timesteps_list[1:] - timesteps_list[:-1]  # [Step]
 
         timesteps_list = timesteps_list[:-1, None].expand(-1, x.size(0))  # [Step, Batch]
-        delta_timesteps_list = delta_timesteps_list[:, None].expand(-1, x.size(0))   # [Batch, Step]
+        delta_timesteps_list = delta_timesteps_list[:, None].expand(-1, x.size(0))   # [Step, Batch]
 
         # Prepare inputs for potential CFG (duplicate batch for unconditional call)
         if self.hp.F0_Predictor.Use_CFG:
@@ -96,7 +96,8 @@ class RectifiedFlow(torch.nn.Module):
             encodings_double = torch.cat([encodings, torch.zeros_like(encodings)], dim=0)
 
         for timesteps, delta_timesteps in zip(timesteps_list, delta_timesteps_list):
-            if self.hp.F0_Predictor.Use_CFG:
+            if self.hp.F0_Predictor.Use_CFG:                
+                delta_timesteps_double = torch.cat([delta_timesteps, delta_timesteps], dim= 0)
                 timesteps_double = torch.cat([timesteps, timesteps], dim=0) # timesteps are the same for both
                 network_outputs_double = self.network(
                     f0s= x_double,
@@ -108,7 +109,7 @@ class RectifiedFlow(torch.nn.Module):
                 network_outputs = network_outputs + cfg_guidance_scale * (network_outputs - network_outputs_without_condition)
 
                 # Update x_double for the next step
-                x_double = x_double + delta_timesteps[:, None, None] * network_outputs_double # Euler update
+                x_double = x_double + delta_timesteps_double[:, None] * network_outputs_double # Euler update
                 x = x_double[:batch_size] # Update x for the next iteration (only the conditional part)
             else:
                 network_outputs = self.network(
@@ -116,7 +117,7 @@ class RectifiedFlow(torch.nn.Module):
                     encodings= encodings,
                     steps= timesteps
                     )
-                x = x + delta_timesteps[:, None, None] * network_outputs # Euler update
+                x = x + delta_timesteps[:, None] * network_outputs # Euler update
 
         return x
     
@@ -134,7 +135,7 @@ class RectifiedFlow(torch.nn.Module):
         distances = torch.cdist(
             noises.view(noises.size(0), -1),
             f0s.view(f0s.size(0), -1)
-            ).detach() ** 2.0        
+            ).detach() ** 2.0
         distances = distances / distances.max() # without normalize_cost, sinkhorn is failed.
 
         ot_maps = ot.bregman.sinkhorn_log(
@@ -178,8 +179,7 @@ class Network(torch.nn.Module):
             Conv_Init(torch.nn.Conv1d(
                 in_channels= 1,
                 out_channels= self.hp.F0_Predictor.Size,
-                kernel_size= 1,
-                w_init_gain= 'relu'
+                kernel_size= 1
                 ), w_init_gain= 'gelu'),
             torch.nn.GELU(approximate= 'tanh')
             )
@@ -192,8 +192,7 @@ class Network(torch.nn.Module):
             Conv_Init(torch.nn.Conv1d(
                 in_channels= self.hp.F0_Predictor.Size,
                 out_channels= self.hp.F0_Predictor.Size * 4,
-                kernel_size= 1,
-                w_init_gain= 'relu'
+                kernel_size= 1
                 ), w_init_gain= 'gelu'),
             torch.nn.GELU(),
             Conv_Init(torch.nn.Conv1d(
@@ -207,7 +206,7 @@ class Network(torch.nn.Module):
             Residual_Block(
                 in_channels= self.hp.F0_Predictor.Size,
                 kernel_size= self.hp.F0_Predictor.Kernel_Size,
-                dilation= stack_index % self.hp.F0_Predictor.Dilation_Cycle,
+                dilation= 2 ** (stack_index % self.hp.F0_Predictor.Dilation_Cycle),
                 condition_channels= self.hp.Encoder.Size
                 )
             for stack_index in range(self.hp.F0_Predictor.Stack)
@@ -215,13 +214,13 @@ class Network(torch.nn.Module):
         
         self.projection =  torch.nn.Sequential(
             Conv_Init(torch.nn.Conv1d(
-                in_channels= self.hp.Diffusion.Size,
-                out_channels= self.hp.Diffusion.Size,
+                in_channels= self.hp.F0_Predictor.Size,
+                out_channels= self.hp.F0_Predictor.Size,
                 kernel_size= 1
                 ), w_init_gain= 'gelu'),
             torch.nn.GELU(approximate= 'tanh'),
             Conv_Init(torch.nn.Conv1d(
-                in_channels= self.hp.Diffusion.Size,
+                in_channels= self.hp.F0_Predictor.Size,
                 out_channels= 1,
                 kernel_size= 1
                 ), w_init_gain= 'gelu')
@@ -343,5 +342,4 @@ def Fused_Gate(x):
     x = x_tanh.tanh() * x_sigmoid.sigmoid()
 
     return x
-
 
