@@ -17,3 +17,13 @@ Train_.py
 temp*.py
 BigVGAN_24K_100band_256x.pts
 Quality_Check/
+BigVGAN_44K_128band_256x.pts
+rmvpe_cpu.pts
+rmvpe_cuda.pts
+Tech_Detector.pts
+temp.pickle
+x.py
+xxx.py
+xxxx.pickle
+x.png
+x.py

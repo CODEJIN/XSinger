@@ -29,6 +29,11 @@ class TechSinger_Linear(torch.nn.Module):
             embedding_dim= self.hp.Encoder.Size
             )
         
+        self.tech_predictor = Tech_Predictor(self.hp)
+        self.tech_weight = torch.empty(self.hp.Techniques, self.hp.Encoder.Size)
+        weight_variance = math.sqrt(3.0) * math.sqrt(2.0 / (self.hp.Techniques + self.hp.Encoder.Size))
+        self.tech_weight.data.uniform_(-weight_variance, weight_variance)
+        
         self.prior_encoder = Prior_Encoder(self.hp)
 
     def forward(
@@ -43,6 +48,7 @@ class TechSinger_Linear(torch.nn.Module):
         singers: torch.IntTensor,
         mels: torch.FloatTensor,
         f0s: torch.FloatTensor,
+        techs: torch.IntTensor,
         mel_lengths: torch.IntTensor,
         ):
         normalized_mels = (mels - self.mel_mean) / self.mel_std
@@ -68,16 +74,19 @@ class TechSinger_Linear(torch.nn.Module):
             f0s= f0s
             )   # [Batch, Dec_t]
         f0_encodings = self.f0_embedding(f0s_coarse).mT # [Batch, Enc_d, Dec_t]
+
+        prediction_techs = self.tech_predictor(encodings)
+        techs = torch.einsum('bnt,ne->bet', techs.float(), self.tech_weight)
         
         prediction_mels = self.prior_encoder(
-            encodings= encodings + f0_encodings,
+            encodings= encodings + f0_encodings + techs,
             lengths= mel_lengths
             )
 
         return \
             normalized_mels, prediction_mels, \
             f0_flows, prediction_f0_flows, \
-            cross_attention_alignments
+            prediction_techs, cross_attention_alignments
     
     def Inference(
         self,
@@ -119,9 +128,13 @@ class TechSinger_Linear(torch.nn.Module):
             f0s= f0s
             )   # [Batch, Dec_t]
         f0_encodings = self.f0_embedding(f0s_coarse).mT
+
+        techs = self.tech_predictor(encodings)
+        techs = (techs > 0.0).int()
+        techs = torch.einsum('bnt,ne->bet', techs.float(), self.tech_weight)
         
         prediction_mels = self.prior_encoder(
-            encodings= encodings + f0_encodings,
+            encodings= encodings + f0_encodings + techs,
             lengths= mel_lengths
             )
         prediction_mels = prediction_mels * self.mel_std + self.mel_mean
@@ -142,8 +155,7 @@ class TechSinger_Linear(torch.nn.Module):
         f0s_coarse = (f0s_mel + 0.5).int()
         
         return f0s_coarse
-        
-        
+
 
 class Encoder(torch.nn.Module): 
     def __init__(
@@ -198,7 +210,8 @@ class Encoder(torch.nn.Module):
             )   # [Batch, Enc_d, Note_t]
         
         # average pooling
-        token_to_note_alignments = (Length_Regulate(token_on_note_lengths, lyric_encodings.size(2)) / token_on_note_lengths[:, None, :].clamp(1.0))  # [Batch, Token_t, Note_t]
+        token_to_note_alignments = \
+            Length_Regulate(token_on_note_lengths, lyric_encodings.size(2)) / token_on_note_lengths[:, None, :].clamp(1.0)  # [Batch, Token_t, Note_t]
         
         pooled_lyric_encodings: torch.FloatTensor = lyric_encodings @ token_to_note_alignments  # [Batch, Enc_d, Note_t]
         pooled_lyric_encodings: torch.FloatTensor = self.phoneme_to_note_encoder(
@@ -251,10 +264,7 @@ class Lyric_Encoder(torch.nn.Module):
                 channels= self.hp.Encoder.Size,
                 num_head= self.hp.Encoder.Lyric_Encoder.Head,
                 ffn_kernel_size= self.hp.Encoder.Lyric_Encoder.FFN.Kernel_Size,
-                ffn_dropout_rate= self.hp.Encoder.Lyric_Encoder.FFN.Dropout_Rate,
-                norm_type= Norm_Type.Mixed_LayerNorm if index == 0 else Norm_Type.LayerNorm,
-                layer_norm_condition_channels= self.hp.Encoder.Size if index == 0 else None,
-                beta_distribution_concentration= self.hp.Encoder.Lyric_Encoder.Beta_Distribution_Concentration if index == 0 else None
+                ffn_dropout_rate= self.hp.Encoder.Lyric_Encoder.FFN.Dropout_Rate
                 )
             for index in range(self.hp.Encoder.Lyric_Encoder.Stack)
             ])  # real type: torch.nn.ModuleList[FFT_BLock]
@@ -453,6 +463,51 @@ class Phoneme_to_Note_Cross_Encoder(torch.nn.Module):
         cross_alignments = torch.cat(cross_alignments, dim= 1).mean(dim= 1) # [Batch, Melody_d, Lyric_d]
 
         return encodings, cross_alignments
+
+class Tech_Encoder(torch.nn.Module):
+    def __init__(
+        self,
+        hyper_parameters: Namespace
+        ):
+        super().__init__()
+        self.hp = hyper_parameters
+        
+        self.blocks = torch.nn.ModuleList([
+            FFT_Block(
+                channels= self.hp.Encoder.Size,
+                num_head= self.hp.Tech_Predictor.Head,
+                ffn_kernel_size= self.hp.Tech_Predictor.FFN.Kernel_Size,
+                ffn_dropout_rate= self.hp.Tech_Predictor.FFN.Dropout_Rate
+                )
+            for _ in range(self.hp.Tech_Predictor.Stack)
+            ])        
+
+        self.norm = torch.nn.LayerNorm(self.hp.Encoder.Size)
+        self.projection = Conv_Init(torch.nn.Conv1d(
+            in_channels= self.hp.Encoder.Size,
+            out_channels= self.hp.Techniques,
+            kernel_size= 1
+            ), w_init_gain= 'linear')
+
+    def forward(
+        self,
+        encodings: torch.FloatTensor,
+        lengths: torch.IntTensor
+        ) -> torch.FloatTensor:
+        '''
+        encodings: [Batch, Enc_d, Mel_t]
+        lengths: [Batch], mel_lengths
+        '''
+        for block in self.blocks:
+            encodings = block(
+                x= encodings,
+                lengths= lengths                
+                )
+        encodings = self.norm(encodings.mT).mT
+        techs = self.projection(encodings)
+
+        return techs
+
 
 class Prior_Encoder(torch.nn.Module):
     def __init__(

@@ -1,7 +1,7 @@
 Sound:
     Hop_Size: 256
-    N_Mel: 100
-    Sample_Rate: 24000
+    N_Mel: 128
+    Sample_Rate: 44100
     F0_Min: 65  # C2
     F0_Max: 2094    # C7
 
@@ -53,6 +53,14 @@ F0_Predictor:
     Use_OT: true
     Coarse_Bin: 256
 
+Tech_Predictor:
+    Stack: 4
+    Head: 2
+    Dropout_Rate: 0.1
+    FFN:
+        Kernel_Size: 7
+        Dropout_Rate: 0.1
+
 Prior_Encoder:
     Stack: 8
     Kernel_Size: 5
@@ -71,23 +79,19 @@ Prior_Encoder:
 #     Use_OT: true
 #     Use_CFG: true
 
-
-Token_Path: './Pattern/Token.yaml'
-Mel_Info_Path: './Pattern/Mel_Info.yaml'
-F0_Info_Path: './Pattern/F0_Info.yaml'
-Singer_Info_Path: './Pattern/Singer_Info.yaml'
-Genre_Info_Path: './Pattern/Genre_Info.yaml'
-Language_Info_Path: './Pattern/Language_Info.yaml'
+Dataset_Path: '/mnt/f/Datasets/44K.TechSinger'
+Token_Path: 'Token.yaml'
+Mel_Info_Path: 'Mel_Info.yaml'
+F0_Info_Path: 'F0_Info.yaml'
+Singer_Info_Path: 'Singer_Info.yaml'
+Genre_Info_Path: 'Genre_Info.yaml'
+Language_Info_Path: 'Language_Info.yaml'
 Train:
     Pattern_Cache: false
     Train_Pattern:
-        Path: './Pattern/Train'
-        Metadata_File: 'METADATA.PICKLE'
         Accumulated_Dataset_Epoch: 100 # This is to prevent slow down from torch.utils.data.DataLoader when the number of patterns is small.
         Augmentation_Ratio: 0.10
     Eval_Pattern:
-        Path: './Pattern/Eval'
-        Metadata_File: 'METADATA.PICKLE'
         Accumulated_Dataset_Epoch: 4   # When singer is 1, evaluation pattern is also 1. Because offset is selected randomly, this is meaningful.
     Num_Workers: 2
     Batch_Size: 16

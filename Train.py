@@ -118,7 +118,6 @@ class Trainer:
             language_dict= language_dict,
             pattern_path= self.hp.Train.Train_Pattern.Path,
             metadata_file= self.hp.Train.Train_Pattern.Metadata_File,
-            num_combination= self.hp.Train.Num_Combination,
             pattern_length_min= self.hp.Train.Pattern_Length.Min,
             pattern_length_max= self.hp.Train.Pattern_Length.Max,
             accumulated_dataset_epoch= self.hp.Train.Train_Pattern.Accumulated_Dataset_Epoch,
@@ -131,7 +130,6 @@ class Trainer:
             language_dict= language_dict,
             pattern_path= self.hp.Train.Eval_Pattern.Path,
             metadata_file= self.hp.Train.Eval_Pattern.Metadata_File,
-            num_combination= self.hp.Train.Num_Combination,
             pattern_length_min= self.hp.Train.Pattern_Length.Min,
             pattern_length_max= self.hp.Train.Pattern_Length.Max,
             use_pattern_cache= self.hp.Train.Pattern_Cache,
@@ -192,7 +190,7 @@ class Trainer:
         mel_dict = yaml.load(open(self.hp.Mel_Info_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
         f0_dict = yaml.load(open(self.hp.F0_Info_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)        
         mel_mean, mel_std = mel_dict['Total']['Mean'], mel_dict['Total']['Std']
-        f0_mean, f0_std = f0_dict['Total']['Mean'], mel_dict['Total']['Std']
+        f0_mean, f0_std = f0_dict['Total']['Mean'], f0_dict['Total']['Std']
 
         self.model_dict = {
             'TechSinger_Linear': TechSinger_Linear(

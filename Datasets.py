@@ -92,8 +92,7 @@ class Dataset(torch.utils.data.Dataset):
         singer_dict: Dict[str, int],
         language_dict: Dict[str, int],
         pattern_path: str,
-        metadata_file: str,
-        num_combination: int,
+        metadata_file: str,        
         pattern_length_min: int,
         pattern_length_max: int,
         accumulated_dataset_epoch: int= 1,
@@ -101,18 +100,13 @@ class Dataset(torch.utils.data.Dataset):
         use_pattern_cache: bool= False
         ):
         super().__init__()
-        assert pattern_length_min % num_combination == 0, f'pattern_length_min must be dividable by num_combiation: {pattern_length_min} % {num_combination} != 0'
-        assert pattern_length_max % num_combination == 0, f'pattern_length_max must be dividable by num_combiation: {pattern_length_max} % {num_combination} != 0'
         
         self.token_dict = token_dict
         self.singer_dict = singer_dict
         self.language_dict = language_dict
         self.pattern_path = pattern_path
-        self.num_combination = num_combination
         self.pattern_length_min = pattern_length_min
         self.pattern_length_max = pattern_length_max
-        self.sample_pattern_length_min = pattern_length_min // num_combination
-        self.sample_pattern_length_max = pattern_length_max // num_combination
 
         metadata_dict = pickle.load(open(
             os.path.join(pattern_path, metadata_file).replace('\\', '/'), 'rb'
@@ -135,58 +129,41 @@ class Dataset(torch.utils.data.Dataset):
             self.Pattern_LRU_Cache = functools.lru_cache(maxsize= None)(self.Pattern_LRU_Cache)
 
     def __getitem__(self, idx):
-        token_combination, token_on_note_length_combination, \
-        note_combination, duration_combination, \
-        singer_combination, language_combination, \
-        mel_combination, f0_combination = [], [], [], [], [], [], [], []
-
-        for sample_pattern in [self.patterns[idx]] + list(sample(self.patterns, self.num_combination - 1)):
-            token, token_on_note_length, note, duration, singer, language, mel, f0 = self.Pattern_LRU_Cache(
-                os.path.join(self.pattern_path, sample_pattern).replace('\\', '/')
-                )
-            
-            # note offset
-            while True:
-                note_offset_start = np.random.randint(0, len(note))
-                note_offset_end = None
-                for offset_end_candidate in range(note_offset_start + 1, len(note) + 1):    # as large as possible
-                    if sum(duration[note_offset_start:offset_end_candidate]) < self.sample_pattern_length_min:
-                        continue
-                    elif sum(duration[note_offset_start:offset_end_candidate]) > self.sample_pattern_length_max:
-                        break
-                    note_offset_end = offset_end_candidate
-                if not note_offset_end is None:
-                    break
-            
-            # mel code offset
-            mel_offset_start, mel_offset_end = sum(duration[:note_offset_start]), sum(duration[:note_offset_end])
-
-            token = [x for token_on_note in token[note_offset_start:note_offset_end] for x in token_on_note]
-            token_on_note_length = token_on_note_length[note_offset_start:note_offset_end]
-            note = note[note_offset_start:note_offset_end]
-            duration = duration[note_offset_start:note_offset_end]
-            singer = [singer] * len(token)
-            language = [language] * len(token)
-            mel = mel[:, mel_offset_start:mel_offset_end]
-            f0 = f0[mel_offset_start:mel_offset_end]
-
-            token_combination.extend(token)
-            token_on_note_length_combination.extend(token_on_note_length)
-            note_combination.extend(note)
-            duration_combination.extend(duration)
-            singer_combination.extend(singer)
-            language_combination.extend(language)
-            mel_combination.append(mel)
-            f0_combination.append(f0)
-
-        mel_combination = np.concatenate(mel_combination, axis= 1)
-        f0_combination = np.concatenate(f0_combination, axis= 0)
+        token, token_on_note_length, note, \
+        duration, singer, language, mel, f0 = self.Pattern_LRU_Cache(
+            os.path.join(self.pattern_path, self.patterns[idx]).replace('\\', '/')
+            )
         
+        # note offset
+        while True:
+            note_offset_start = np.random.randint(0, len(note))
+            note_offset_end = None
+            for offset_end_candidate in range(note_offset_start + 1, len(note) + 1):    # as large as possible
+                if sum(duration[note_offset_start:offset_end_candidate]) < self.pattern_length_min:
+                    continue
+                elif sum(duration[note_offset_start:offset_end_candidate]) > self.pattern_length_max:
+                    break
+                note_offset_end = offset_end_candidate
+            if not note_offset_end is None:
+                break
+        
+        # mel code offset
+        mel_offset_start, mel_offset_end = sum(duration[:note_offset_start]), sum(duration[:note_offset_end])
+
+        token = [x for token_on_note in token[note_offset_start:note_offset_end] for x in token_on_note]
+        token_on_note_length = token_on_note_length[note_offset_start:note_offset_end]
+        note = note[note_offset_start:note_offset_end]
+        duration = duration[note_offset_start:note_offset_end]
+        singer = [singer] * len(token)
+        language = [language] * len(token)
+        mel = mel[:, mel_offset_start:mel_offset_end]
+        f0 = f0[mel_offset_start:mel_offset_end]
+
         return \
-            token_combination, token_on_note_length_combination, \
-            note_combination, duration_combination, \
-            singer_combination, language_combination, \
-            mel_combination, f0_combination
+            token, token_on_note_length, \
+            note, duration, \
+            singer, language, \
+            mel, f0
     
     def Pattern_LRU_Cache(self, path: str):
         pattern_dict = pickle.load(open(path, 'rb'))

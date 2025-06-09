@@ -15,7 +15,8 @@ class Guided_Attention_Loss(torch.nn.Module):
         key_lengths: [Batch]
         '''
         masks = self.Get_Masks(token_on_note_lengths, note_durations).to(alignments.device)
-        loss = (alignments * masks).sum() / (token_on_note_lengths.sum(dim= 1) * note_durations.sum(dim= 1)).sum()
+        # loss = (alignments * masks).sum() / (token_on_note_lengths.sum(dim= 1) * note_durations.sum(dim= 1)).sum()
+        loss = (alignments * masks).sum() / masks.sum().clamp(min= 1e-5)
 
         return loss
 
