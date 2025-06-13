@@ -11,8 +11,8 @@ def English_Phoneme_Split(
     # To rule make, I manage /ʔ/ like a vowel
     diphones = ['tʃ', 'hw', 'aʊ', 'kw', 'eɪ', 'oʊ', 'dʒ', 'ɔɪ', 'aɪ']
     use_vowels = [
-        'aʊ', 'eɪ', 'oʊ', 'ɔɪ', 'aɪ', 'a', 'e', 'i', 'o', 'u', 
-        'æ', 'ɐ', 'ɑ', 'ɔ', 'ə', 'ɛ', 'ɜ', 'ɪ', 'ʊ', 'ʌ', 'ᵻ', 'ɚ', 'ʔ', 
+        'aʊ', 'eɪ', 'oʊ', 'ɔɪ', 'aɪ', 'e', 'i', 'o', 'u', 'ɐ', 'a',
+        'æ', 'ɑ', 'ɔ', 'ə', 'ɛ', 'ɜ', 'ɪ', 'ʊ', 'ʌ', 'ᵻ', 'ɚ', 'ʔ', 
         ]
 
     pronunciations = [x[1] for x in music]
@@ -44,6 +44,8 @@ def English_Phoneme_Split(
                     assert False
             index += 1 + is_diphone
 
+        if nucleus == 'ɐ': nucleus = 'ə'
+        if nucleus == 'a': nucleus = 'æ'
         lyrics.append([onsets, nucleus, codas])
 
     # assert len(lyrics) == len(music)

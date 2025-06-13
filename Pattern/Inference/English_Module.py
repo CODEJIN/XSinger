@@ -109,8 +109,6 @@ def _English_Syllablize(
             onsets.append(phoneme)
         else:   # vowel
             nucleus = phoneme
-            if nucleus == 'ɐ': nucleus = 'ə'
-            if nucleus == 'a': nucleus = 'æ'
             syllable_list.append((onsets, nucleus, []))
             onsets = []
             nucleus = None
@@ -344,10 +342,6 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
         hop_size= hop_size
         )
     music = Convert_Lyric_Syllable_to_Sequence(music)
-    
-    for note in music:
-        while '\u0329' in note.Lyric:
-            note.Lyric.pop(note.Lyric.index('\u0329'))
     
     # GTSinger has the tech info.
     tech = np.array([

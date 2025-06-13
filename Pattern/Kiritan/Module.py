@@ -48,14 +48,13 @@ def remove_initial_consonant(syllable):
 
     return vowel_map[syllable[-1]]
 
-
 def Japanese_G2P_Lyric(music):
     ipa_music = []
     for music_index, (current_duration, current_lyric, current_note) in enumerate(music):
         if current_lyric == '<X>':
             ipa_music.append((current_duration, [current_lyric], current_note, current_lyric))
             continue
-        
+        next_syllable = None
         if music_index + 1 < len(music) and music[music_index + 1][1] != '<X>':
             next_syllable = music[music_index + 1][1]
         elif music_index + 2 < len(music) and music[music_index + 1][0] < 0.5: # music[music_index + 1][1] == '<X>' but short
@@ -64,14 +63,13 @@ def Japanese_G2P_Lyric(music):
             next_syllable = None
 
         ipa_lyric = _Japanese_Syllable_to_IPA(current_lyric, next_syllable)
-        # ipa_music.append((current_duration, ipa_lyric, current_note))        
         ipa_music.append((
             current_duration,
             [ipa_lyric] if ipa_lyric == '<X>' else ipa_lyric,
             current_note,
             current_lyric
             ))
-    
+
     return ipa_music
 
 def _Japanese_Syllable_to_IPA(
@@ -88,9 +86,9 @@ def _Japanese_Syllable_to_IPA(
         'ま'  : [['m'], 'a', []], 'み': [['m' ], 'i', []],  'む'  : [['m' ], 'ɯ', []],  'め': [['m'], 'e', []], 'も'  : [['m',], 'o', []],
         'や'  : [['j'], 'a', []],                           'ゆ'  : [['j' ], 'ɯ', []],                          'よ'  : [['j',], 'o', []],
         'ら'  : [['ɾ'], 'a', []], 'り': [['ɾ' ], 'i', []],  'る'  : [['ɾ' ], 'ɯ', []],  'れ': [['ɾ'], 'e', []], 'ろ'  : [['ɾ',], 'o', []],
-        'わ'  : [['ɰ'], 'a', []],                                                                               'を'  : [[    ], 'o', []],
+        'わ'  : [['w'], 'a', []],                                                                               'を'  : [[    ], 'o', []],
 
-                                                            'ゔ'  : [['v',], 'u', []],
+                                                            'ゔ'  : [['v',], 'ɯ', []],
         'が'  : [['g' ], 'a', []], 'ぎ': [['g' ], 'i', []], 'ぐ'  : [['g',], 'ɯ', []], 'げ': [['g' ], 'e', []], 'ご'  : [['g',], 'o', []],
         'ざ'  : [['dz'], 'a', []], 'じ': [['dʑ'], 'i', []], 'ず'  : [['dz'], 'ɯ', []], 'ぜ': [['dz'], 'e', []], 'ぞ'  : [['dz'], 'o', []],
         'だ'  : [['d' ], 'a', []], 'ぢ': [['dʑ'], 'i', []], 'づ'  : [['dz'], 'ɯ', []], 'で': [['d' ], 'e', []], 'ど'  : [['d',], 'o', []],
@@ -126,12 +124,12 @@ def _Japanese_Syllable_to_IPA(
     elif len(syllable) > 1 and syllable[-1] == 'っ':
         ipa = _Japanese_Syllable_to_IPA(syllable[:-1], 'っ')
         next_onset = ipa_dict[next_syllable[0]][0] if not next_syllable is None else []
-        if len(next_onset) == 0:
-            next_onset.append('ʔ')
+        # if len(next_onset) == 0:
+        #     next_onset.append('ʔ')
         ipa[2] = next_onset
         return ipa
     elif len(syllable) > 1 and syllable[-1] == 'ん':
-        ipa = _Japanese_Syllable_to_IPA(syllable[:-1], 'ん')        
+        ipa = _Japanese_Syllable_to_IPA(syllable[:-1], 'ん')
         _, _, ipa[2] = _Japanese_Syllable_to_IPA(syllable[-1], next_syllable)
         return ipa
     elif len(syllable) == 2:
@@ -141,16 +139,16 @@ def _Japanese_Syllable_to_IPA(
         elif syllable[1] in ['ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ']:
             stegana_ipa = ipa_dict[syllable[1]]
             ipa[0] = ipa[0] + stegana_ipa[0]
-            ipa[1] = stegana_ipa[1]        
-        else: # syllable[1] in ['ゕ', 'ゖ', 'ゎ', 'ゃ', 'ゅ', 'ょ']
-            raise NotImplementedError(f'unimplemented syllable: {syllable}')        
-        return ipa    
+            ipa[1] = stegana_ipa[1]
+        else:   # syllable[1] in ['ゕ', 'ゖ', 'ゎ', 'ゃ', 'ゅ', 'ょ']
+            raise NotImplementedError(f'unimplemented syllable: {syllable}')
+        return ipa
     elif len(syllable) == 3 and syllable[2] == 'ん':
         ipa = _Japanese_Syllable_to_IPA(syllable[:2], syllable[2])
         _, _, ipa[2] = _Japanese_Syllable_to_IPA(syllable[2], next_syllable)
         return ipa
-    
-    if syllable == 'ん':    # single 'ん'
+
+    if syllable == 'ん':
         if next_syllable is None:
             return [[], '', ['ɴ']]
         elif next_syllable == 'っ':  # 'んっ' is impossible, but some songs in Ofuton have 'んっ'. 'っ' is ignored.
@@ -160,31 +158,28 @@ def _Japanese_Syllable_to_IPA(
             'な', 'に', 'ぬ', 'ね', 'の',
             'ら', 'り', 'る', 'れ', 'ろ',
             'ざ', 'じ', 'ず', 'ぜ', 'ぞ',
-            'だ', 'ぢ', 'づ', 'で', 'ど'
-            ]:
+            'だ', 'ぢ', 'づ', 'で', 'ど',
+                        'ゔ',
+            'や', 'ゆ', 'よ', 'わ', 'を'
+        ]:
             return [[], '', ['n']]
         elif next_syllable[0] in [
             'は', 'ひ', 'ふ', 'へ', 'ほ',
             'ま', 'み', 'む', 'め', 'も',
             'ば', 'び', 'ぶ', 'べ', 'ぼ',
-            'ぱ', 'ぴ', 'ぷ', 'ぺ', 'ぽ',
-                        'ゔ'
-            ]:
+            'ぱ', 'ぴ', 'ぷ', 'ぺ', 'ぽ'
+        ]:
             return [[], '', ['m']]
         elif next_syllable[0] in [
             'か', 'き', 'く', 'け', 'こ',
             'が', 'ぎ', 'ぐ', 'げ', 'ご'
-            ]:
-            return [[], '', ['ŋ']]
-        elif next_syllable[0] in [
-            'や', 'ゆ', 'よ', 'わ', 'を'
-            ]:
-            return [[], '', ['ɰ̃']]
+        ]:
+            return [[], '', ['ɴ']]
         elif next_syllable[0] in [
             'さ', 'し', 'す', 'せ', 'そ',
             'た', 'ち', 'つ', 'て', 'と'
-            ]:
-            return [[], '', ['n̪']]
+        ]:
+            return [[], '', ['n']]
         else:
             raise ValueError(f'Unsupported next syllable: {next_syllable}')
 
@@ -277,7 +272,7 @@ def Process(
                 else:
                     music.append((duration_seconds, '<X>', 0))
 
-    music = Japanese_G2P_Lyric(music)    
+    music = Japanese_G2P_Lyric(music)
     music = [
         Note(
             Duration= duration,
@@ -292,13 +287,20 @@ def Process(
         music= music,
         sample_rate= sample_rate,
         hop_size= hop_size
-        ) 
-    music = Convert_Lyric_Syllable_to_Sequence(music)  
+        )
+    music = Convert_Lyric_Syllable_to_Sequence(music)
     while True:
         if music[-1].Lyric[0] == '<X>':
             music = music[:-1]
         else:
             break
-    
+
+    for note in music:
+        if '' in note.Lyric:
+            print(score_path)
+            for x in music:
+                print(x)
+            assert False
+
     return music
 

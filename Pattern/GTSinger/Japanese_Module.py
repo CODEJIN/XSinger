@@ -111,7 +111,7 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
 
     try:
         ipa_list_0 = [
-            ['<X>'] if x[0] in ['<SP>', '<AP>'] else _Syllablize(x)
+            [['<X>',]] if x[0] in ['<SP>', '<AP>'] else _Syllablize(x)
             for x in ipa_list_0
             ]
     except Exception as e:
@@ -138,12 +138,12 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
         breathy_tech_list_0, pharyngeal_tech_list_0,
         vibrato_tech_list_0, glissando_tech_list_0
         ):
-        num_syllable = len(ipa) if ipa != ['<X>'] else 1
+        num_syllable = len(ipa) if ipa[0] != '<X>' else 1
 
         num_phonemes = [
             len(onsets) + (nucleus != '') + len(coda)
             for onsets, nucleus, coda in ipa
-            ] if ipa != ['<X>'] else [1]
+            ] if ipa[0][0] != '<X>' else [1]
 
         if num_syllable == 1 and len(phoneme_note) > 1:
             text_list_1.append('<X>' if text in ['<SP>', '<AP>'] else text)
@@ -227,7 +227,7 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
                     ipa = current_ipa.pop()
                     current_ipa.extend([(ipa[0], ipa[1], []), ([], ipa[1], ipa[2])])
                 else:
-                    assert False    # ?                        
+                    assert False    # ?
                 current_note.append(note)
                 current_duration.append(phoneme_duration[note_index])
                 current_mix_tech.append(mix_tech[note_index])
@@ -274,6 +274,46 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
         hop_size= hop_size
         )
     music = Convert_Lyric_Syllable_to_Sequence(music)
+
+    for note in music:
+        if '' in note.Lyric:
+            if note.Lyric == ['', 'ɴ']:
+                note.Lyric = ['ɴ']  # coda only.
+            # elif '':
+        while 'ɨ' in note.Lyric:
+            note.Lyric[note.Lyric.index('ɨ')] = 'ɯ'
+        while 'ʑ' in note.Lyric:
+            note.Lyric[note.Lyric.index('ʑ')] = 'dʑ'
+
+        if 'ɰ̃' in note.Lyric:
+            print(metadata['item_name'])
+            for x in music:
+                print(x)
+            assert False
+        
+        # while 'c' in note.Lyric:
+        #     elif 'つ' in note.Text:
+        #         note.Lyric[note.Lyric.index('c')] = 'ts'
+        #     elif 'ち' in note.Text:
+        #         note.Lyric[note.Lyric.index('c')] = 'tɕ'
+            
+        
+            # if note.Lyric == ['k', ''] and note.Text == '汽':
+            #     note.Lyric = ['k', 'i']
+            
+            # elif note.Lyric == ['n', ''] and note.Text == 'ン':
+            #     note.Lyric = ['n']
+            # Lyric=['ɕ', ''], Pitch=61, Text='し'
+    # for note in music:
+    #     if '' in note.Lyric:
+    #         print(metadata['item_name'])
+    #         for x in music:
+    #             print(x)
+    #         assert False
+    for note in music:
+        if '' in note.Lyric:
+            print('{} is skipped.'.format(metadata['item_name']))
+            return None, None
     
     # GTSinger has the tech info.
     tech = np.array([

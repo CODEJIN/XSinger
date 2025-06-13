@@ -1,10 +1,5 @@
-import os
-from argparse import Namespace
-import numpy as np
-import pandas as pd
-from typing import List, Dict, Union, Optional, Tuple
+from typing import List, Union
 from ko_pron import romanise
-import hgtk
 
 from .. import Note, Convert_Duration_Second_to_Frame, Convert_Lyric_Syllable_to_Sequence
 
@@ -24,35 +19,25 @@ def _Korean_Phonemize(texts: Union[str, List[str]]):
         ]
     
     pronunciations = [
-        pronunciation.replace('kx', 'kʰ').replace('x', 'h').replace( '\u0361', '').replace('a̠', 'a').\
-            replace('we̞', 'wɛ').replace('o̞', 'o').replace('ʌ̹', 'ʌ').replace('ɕ', 's').replace('ɸʷ', 'ɸ').\
-            replace('wø̞', 'we').replace('kç', 'kʰ').replace('ç', 'h').replace('ɦ', 'h').replace('ɥi', 'wi').\
-            replace('ʃʰ', 'sʰ').replace('ɸ', 'p').replace('β', 'b').replace('ɣ', 'ɡ').replace('ʝ', 'dʑ').\
-            replace('ɲ', 'n').replace('ʎ', 'ɾ').replace('jɛ', 'je').replace('e̞', 'e').replace('ø̞', 'e').replace('ɭ', 'ɾ')
+        pronunciation.replace('x', '')
         for pronunciation in pronunciations
-        ]
-
-    pronunciations = [
-        pronunciation.replace('wɛ', 'we') if any([hgtk.letter.decompose(letter)[1] in ['ㅚ', 'ㅞ'] for letter in text]) else pronunciation
-        for text, pronunciation in zip(texts, pronunciations)
         ]
 
     return pronunciations
 
 korean_vowels = sorted(
-    # list({'u', 'o', 'wɛ', 'jo', 'i', 'ɯ', 'ø', 'wʌ', 'jʌ', 'ja', 'je', 'wi', 'ju', 'wa', 'ʌ', 'ɰi', 'e', 'a', 'we'}),
-    list({'u', 'o', 'wɛ', 'jo', 'i', 'ɯ', 'ø', 'wʌ', 'jʌ', 'ja', 'je', 'wi', 'ju', 'wa', 'ʌ', 'ɰi', 'e', 'a', 'we'}),
+    list({'u', 'o̞', 'we̞', 'jo', 'i', 'ɯ', 'ø̞', 'wʌ̹', 'jʌ̹', 'ja̠', 'je̞', 'ɥi', 'ju', 'wa̠', 'ʌ̹', 'ɰi', 'e̞', 'a̠'}),
     key= lambda x: len(x),
     reverse= True
     )
 korean_boundary_dict = {
-    'ts͈': ('', 'ts͈'), 'tʰ': ('', 'tʰ'), 't͈': ('', 't͈'), 's͈': ('', 's͈'), 'ɸʷ': ('', 'ɸʷ'), 
-    't': ('', 't'), 'sʰ': ('', 'sʰ'), 'ɸ': ('', 'ɸ'), 'm': ('', 'm'), 'sʰ': ('', 'sʰ'), 'kʰ': ('', 'kʰ'), 
-    'ʃʰ': ('', 'ʃʰ'), 'p͈': ('', 'p͈'), 'ɾ': ('', 'ɾ'), 'ɲ': ('', 'ɲ'), 'tsʰ': ('', 'tsʰ'), 
-    'p': ('', 'p'), 'ts': ('', 'ts'), 'n': ('', 'n'), 'pʰ': ('', 'pʰ'), 'k͈': ('', 'k͈'), 
-    'h': ('', 'h'), 'k': ('', 'k'), 'ɡ': ('', 'ɡ'), 'd': ('', 'd'), 'dʑ': ('', 'dʑ'),
+    't͡ɕ͈': ('', 't͡ɕ͈'), 'tʰ': ('', 'tʰ'), 'ç': ('', 'ç'), 't͈': ('', 't͈'), 's͈': ('', 's͈'), 'ɸʷ': ('', 'ɸʷ'), 
+    't': ('', 't'), 'ɕʰ': ('', 'ɕʰ'), 'ɸ': ('', 'ɸ'), 'm': ('', 'm'), 'sʰ': ('', 'sʰ'), 'kʰ': ('', 'kʰ'), 
+    'ʃʰ': ('', 'ʃʰ'), 'p͈': ('', 'p͈'), 'ɾ': ('', 'ɾ'), 'kç': ('', 'kç'), 'ɲ': ('', 'ɲ'), 't͡ɕʰ': ('', 't͡ɕʰ'), 
+    'p': ('', 'p'), 't͡ɕ': ('', 't͡ɕ'), 'n': ('', 'n'), 'pʰ': ('', 'pʰ'), 'k͈': ('', 'k͈'), 'ɕ͈': ('', 'ɕ͈'), 
+    'h': ('', 'h'), 'k': ('', 'k'), 'ɦ': ('', 'ɦ'), 'ɡ': ('', 'ɡ'), 'd': ('', 'd'), 'd͡ʑ': ('', 'd͡ʑ'),
     'ʎ': ('', 'ʎ'), 'b': ('', 'b'), 'ɣ': ('', 'ɣ'), 'β': ('', 'β'), 'ʝ': ('', 'ʝ'),
-    'k̚': ('k', ''), 'ŋ': ('ŋ', ''), 'p̚': ('p', ''), 't̚': ('t', ''),
+    'ɭ': ('ɭ', ''), 'k̚': ('k', ''), 'ŋ': ('ŋ', ''), 'p̚': ('p', ''), 't̚': ('t', ''),
     }
 
 def _Korean_Split_Vowel(pronunciation: str):
@@ -78,7 +63,7 @@ def _Korean_Syllablize(pronunciation: str):
     current_consonants = []
     if any(
         x in pronunciation and pronunciation[-1] != x
-        for x in ['k̚', 'p̚', 't̚']
+        for x in ['ɭ', 'k̚', 'p̚', 't̚']
         ):
         print(pronunciation)
         assert False
@@ -89,7 +74,7 @@ def _Korean_Syllablize(pronunciation: str):
                 len(syllables) > 0 and \
                 (   
                     len(current_consonants) > 1 or
-                    (len(current_consonants) > 0 and current_consonants[0] in ['ŋ'])
+                    (len(current_consonants) > 0 and current_consonants[0] in ['ɭ', 'ŋ'])
                     ):
                 syllables[-1][2].append(current_consonants[0])
                 current_consonants = current_consonants[1:]
@@ -149,37 +134,13 @@ def Korean_G2P_Lyric(music):
 
 
 def Process(
-    midi_path: str,
-    lyric_path: str,
+    duration: list[float],
+    lyric: list[str],
+    pitch: list[int],
     sample_rate: int,
     hop_size: int
     ) -> list[Note]:
-    mid = pd.read_csv(midi_path)
-    lyric = ''.join(open(lyric_path, encoding= 'utf-8-sig').readlines()).replace('\n', '').replace(' ', '')
-    music = []
-    for x, syllable in zip(mid.iloc, lyric):
-        if len(music) == 0 and x.start > 0.0:   # initial silence
-            music.append([0.0, x.start, '<X>', 0])
-        elif len(music) > 0 and music[-1][1] < x.start:
-            music.append([music[-1][1], x.start, '<X>', 0])
-        elif len(music) > 0 and music[-1][1] > x.start:
-            x.start = music[-1][1]
-
-        if x.end <= x.start:
-            print(x)
-            assert False
-
-        music.append([
-            x.start,
-            x.end,
-            syllable,
-            x.pitch
-            ])
-    music = [
-        (round(end - start, 5), syllable, note)
-        for start, end, syllable, note in music
-        ]
-    
+    music = [x for x in zip(duration, lyric, pitch)]
     music = Korean_G2P_Lyric(music)
     music = [
         Note(

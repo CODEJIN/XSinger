@@ -5,6 +5,16 @@ from pinyin_to_ipa import pinyin_to_ipa
 
 from .. import Note, Convert_Duration_Second_to_Frame, Convert_Lyric_Syllable_to_Sequence
 
+chinese_diphthongs = ['ai̯','au̯','ou̯','ei̯']
+chinese_monophthongs = ['ɛ','a','ʊ','i','ə','ɤ','o','ɔ','u','y','e']
+chinese_syllablc_consonants = ['ɻ̩', 'ɹ̩', 'ɚ', 'n']  # 'for 嗯(n)'
+chinese_onsets = sorted([
+    'tɕʰ','tsʰ','tʂʰ','ʈʂʰ','tɕ','ts','tʂ','ʈʂ',
+    'kʰ','pʰ','tʰ','ʐ̩','ɕ','f','j','k','l','m','n',
+    'p','ʐ','s','ʂ','t','w','x','ɥ','h','ʂ','ʐ','ɻ'
+    ], key= lambda x: len(x), reverse= True)
+chinese_codas = ['n','ŋ']
+
 def _Chinese_Phonemize(
     texts: Union[str, List[str]],
     syllable_splitter: str= ' '
@@ -12,43 +22,16 @@ def _Chinese_Phonemize(
     if type(texts) == str:
         texts = [texts]
 
-    
     return [
         f'{syllable_splitter}'.join([
             ''.join([
                 x for x in pinyin_to_ipa(pinyin(character, v_to_u= True)[0][0])[0]
-                ]).
-                replace('˧', '').replace('˩', '').replace('˥', '').
-                replace('tɕ', 't͡ɕ').replace('tɕʰ', 't͡ɕʰ').replace('ts', 't͡s').
-                replace('tsʰ', 't͡sʰ').replace('tʂ', 't͡ʂ').replace('tʂʰ', 't͡ʂʰ').
-                replace('ʈʂ', 'ʈ͡ʂ').replace('ʈʂʰ', 'ʈ͡ʂʰ')
+                ]).replace('ɹ̩', 'ɚ').replace('ɻ̩', 'ɚ').replace('ɔ', 'o').replace('ɛ', 'e').replace('ʊ', 'u')\
+                .replace('˧', '').replace('˩', '').replace('˥', '')
             for character in text
             ])
-        for text in texts        
+        for text in texts
         ]
-
-chinese_diphthongs = ['ai̯','au̯','ou̯','ei̯']
-chinese_monophthongs = ['ɛ','a','ʊ','i','ə','ɤ','o','ɔ','u','y','e']
-chinese_syllablc_consonants = ['ɻ̩', 'ɹ̩', 'ɚ', 'n']  # 'for 嗯(n)'
-chinese_onsets = sorted([
-    't͡ɕʰ','t͡sʰ','t͡ʂʰ','ʈ͡ʂʰ','t͡ɕ','t͡s','t͡ʂ','ʈ͡ʂ',
-    'kʰ','pʰ','tʰ','ʐ̩','ɕ','f','j','k','l','m','n',
-    'p','ʐ','s','ʂ','t','w','x','ɥ','h','ʂ','ʐ','ɻ'
-    ], key= lambda x: len(x), reverse= True)
-chinese_codas = ['n','ŋ']
-def _Chinese_Split_Phoneme(syllable: str):
-    if len(syllable) == 0:
-        return []
-
-    for phoneme in chinese_diphthongs + chinese_monophthongs + chinese_syllablc_consonants + chinese_onsets + chinese_codas:
-        if phoneme in syllable:
-            phoneme_index = syllable.index(phoneme)
-            return \
-                _Chinese_Split_Phoneme(syllable[:phoneme_index]) + \
-                [phoneme] + \
-                _Chinese_Split_Phoneme(syllable[phoneme_index + len(phoneme):])
-
-    return [syllable]
 
 # Basically, Chinese does not consider onset, nucleus, coda. It uses intial + final.
 # But, in multilingual condition, onset, nucleus, coda concept is usable for compatibility.
@@ -70,6 +53,19 @@ def _Chinese_Syllablize(pronunciation: str):
 
     return syllables
 
+def _Chinese_Split_Phoneme(syllable: str):
+    if len(syllable) == 0:
+        return []
+
+    for phoneme in chinese_diphthongs + chinese_monophthongs + chinese_syllablc_consonants + chinese_onsets + chinese_codas:
+        if phoneme in syllable:
+            phoneme_index = syllable.index(phoneme)
+            return \
+                _Chinese_Split_Phoneme(syllable[:phoneme_index]) + \
+                [phoneme] + \
+                _Chinese_Split_Phoneme(syllable[phoneme_index + len(phoneme):])
+
+    return [syllable]
 
 def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note], np.ndarray]:
     # word base info
@@ -118,7 +114,7 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
     ipa_list_0 = []
     for text in text_list_0:
         if text in ['<SP>', '<AP>']:
-            ipa_list_0.append(['<X>'])
+            ipa_list_0.append([('<X>',)])
         else:
             ipa = _Chinese_Syllablize(_Chinese_Phonemize(texts= text)[0])
             ipa_list_0.append(ipa)
@@ -143,12 +139,12 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
         breathy_tech_list_0, pharyngeal_tech_list_0,
         vibrato_tech_list_0, glissando_tech_list_0
         ):
-        num_syllable = len(ipa) if ipa != ['<X>'] else 1
+        num_syllable = len(ipa) if ipa[0] != '<X>' else 1
 
         num_phonemes = [
             len(onsets) + 1 + len(coda)
             for onsets, nucleus, coda in ipa
-            ] if ipa != ['<X>'] else [1]
+            ] if ipa[0][0] != '<X>' else [1]
 
         if num_syllable == 1 and len(phoneme_note) > 1:
             text_list_1.append('<X>' if text in ['<SP>', '<AP>'] else text)
@@ -232,7 +228,7 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
                     ipa = current_ipa.pop()
                     current_ipa.extend([(ipa[0], ipa[1], []), ([], ipa[1], ipa[2])])
                 else:
-                    assert False    # ?                        
+                    assert False    # ?
                 current_note.append(note)
                 current_duration.append(phoneme_duration[note_index])
                 current_mix_tech.append(mix_tech[note_index])

@@ -48,13 +48,14 @@ def remove_initial_consonant(syllable):
 
     return vowel_map[syllable[-1]]
 
+
 def Japanese_G2P_Lyric(music):
     ipa_music = []
     for music_index, (current_duration, current_lyric, current_note) in enumerate(music):
         if current_lyric == '<X>':
             ipa_music.append((current_duration, [current_lyric], current_note, current_lyric))
             continue
-        next_syllable = None
+        
         if music_index + 1 < len(music) and music[music_index + 1][1] != '<X>':
             next_syllable = music[music_index + 1][1]
         elif music_index + 2 < len(music) and music[music_index + 1][0] < 0.5: # music[music_index + 1][1] == '<X>' but short
@@ -62,14 +63,15 @@ def Japanese_G2P_Lyric(music):
         else:
             next_syllable = None
 
-        ipa_lyric = _Japanese_Syllable_to_IPA(current_lyric, next_syllable)        
+        ipa_lyric = _Japanese_Syllable_to_IPA(current_lyric, next_syllable)
+        # ipa_music.append((current_duration, ipa_lyric, current_note))        
         ipa_music.append((
             current_duration,
             [ipa_lyric] if ipa_lyric == '<X>' else ipa_lyric,
             current_note,
             current_lyric
             ))
-
+    
     return ipa_music
 
 def _Japanese_Syllable_to_IPA(
@@ -86,9 +88,9 @@ def _Japanese_Syllable_to_IPA(
         'ま'  : [['m'], 'a', []], 'み': [['m' ], 'i', []],  'む'  : [['m' ], 'ɯ', []],  'め': [['m'], 'e', []], 'も'  : [['m',], 'o', []],
         'や'  : [['j'], 'a', []],                           'ゆ'  : [['j' ], 'ɯ', []],                          'よ'  : [['j',], 'o', []],
         'ら'  : [['ɾ'], 'a', []], 'り': [['ɾ' ], 'i', []],  'る'  : [['ɾ' ], 'ɯ', []],  'れ': [['ɾ'], 'e', []], 'ろ'  : [['ɾ',], 'o', []],
-        'わ'  : [['w'], 'a', []],                                                                               'を'  : [[    ], 'o', []],
+        'わ'  : [['ɰ'], 'a', []],                                                                               'を'  : [[    ], 'o', []],
 
-                                                            'ゔ'  : [['v',], 'ɯ', []],
+                                                            'ゔ'  : [['v',], 'u', []],
         'が'  : [['g' ], 'a', []], 'ぎ': [['g' ], 'i', []], 'ぐ'  : [['g',], 'ɯ', []], 'げ': [['g' ], 'e', []], 'ご'  : [['g',], 'o', []],
         'ざ'  : [['dz'], 'a', []], 'じ': [['dʑ'], 'i', []], 'ず'  : [['dz'], 'ɯ', []], 'ぜ': [['dz'], 'e', []], 'ぞ'  : [['dz'], 'o', []],
         'だ'  : [['d' ], 'a', []], 'ぢ': [['dʑ'], 'i', []], 'づ'  : [['dz'], 'ɯ', []], 'で': [['d' ], 'e', []], 'ど'  : [['d',], 'o', []],
@@ -115,21 +117,21 @@ def _Japanese_Syllable_to_IPA(
         'でゃ': [['dʲ'], 'a', []],                          'でゅ': [['dʲ'], 'ɯ', []],                          'でょ': [['dʲ'], 'o', []],
         }
     
-    syllable = syllable.replace('ヴ', 'ゔ').replace('シ', 'し').replace('んん', 'ん').replace('んっ', 'ん') # Ofuton uses some katakana.
+    syllable = syllable.replace('ヴ', 'ゔ').replace('シ', 'し').replace('んん', 'ん') # Ofuton uses some katakana.
     if not next_syllable is None:
-        next_syllable = next_syllable.replace('ヴ', 'ゔ').replace('シ', 'し').replace('んん', 'ん').replace('んっ', 'ん') # Ofuton uses some katakana.
+        next_syllable = next_syllable.replace('ヴ', 'ゔ').replace('シ', 'し').replace('んん', 'ん') # Ofuton uses some katakana.
 
     if syllable in ipa_dict.keys():
         return ipa_dict[syllable]
     elif len(syllable) > 1 and syllable[-1] == 'っ':
         ipa = _Japanese_Syllable_to_IPA(syllable[:-1], 'っ')
         next_onset = ipa_dict[next_syllable[0]][0] if not next_syllable is None else []
-        # if len(next_onset) == 0:
-        #     next_onset.append('ʔ')
+        if len(next_onset) == 0:
+            next_onset.append('ʔ')
         ipa[2] = next_onset
         return ipa
     elif len(syllable) > 1 and syllable[-1] == 'ん':
-        ipa = _Japanese_Syllable_to_IPA(syllable[:-1], 'ん')
+        ipa = _Japanese_Syllable_to_IPA(syllable[:-1], 'ん')        
         _, _, ipa[2] = _Japanese_Syllable_to_IPA(syllable[-1], next_syllable)
         return ipa
     elif len(syllable) == 2:
@@ -139,16 +141,16 @@ def _Japanese_Syllable_to_IPA(
         elif syllable[1] in ['ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ']:
             stegana_ipa = ipa_dict[syllable[1]]
             ipa[0] = ipa[0] + stegana_ipa[0]
-            ipa[1] = stegana_ipa[1]
-        else:   # syllable[1] in ['ゕ', 'ゖ', 'ゎ', 'ゃ', 'ゅ', 'ょ']
-            raise NotImplementedError(f'unimplemented syllable: {syllable}')
-        return ipa
+            ipa[1] = stegana_ipa[1]        
+        else: # syllable[1] in ['ゕ', 'ゖ', 'ゎ', 'ゃ', 'ゅ', 'ょ']
+            raise NotImplementedError(f'unimplemented syllable: {syllable}')        
+        return ipa    
     elif len(syllable) == 3 and syllable[2] == 'ん':
         ipa = _Japanese_Syllable_to_IPA(syllable[:2], syllable[2])
         _, _, ipa[2] = _Japanese_Syllable_to_IPA(syllable[2], next_syllable)
         return ipa
-
-    if syllable == 'ん':
+    
+    if syllable == 'ん':    # single 'ん'
         if next_syllable is None:
             return [[], '', ['ɴ']]
         elif next_syllable == 'っ':  # 'んっ' is impossible, but some songs in Ofuton have 'んっ'. 'っ' is ignored.
@@ -158,119 +160,44 @@ def _Japanese_Syllable_to_IPA(
             'な', 'に', 'ぬ', 'ね', 'の',
             'ら', 'り', 'る', 'れ', 'ろ',
             'ざ', 'じ', 'ず', 'ぜ', 'ぞ',
-            'だ', 'ぢ', 'づ', 'で', 'ど',
-                        'ゔ',
-            'や', 'ゆ', 'よ', 'わ', 'を'
-        ]:
+            'だ', 'ぢ', 'づ', 'で', 'ど'
+            ]:
             return [[], '', ['n']]
         elif next_syllable[0] in [
             'は', 'ひ', 'ふ', 'へ', 'ほ',
             'ま', 'み', 'む', 'め', 'も',
             'ば', 'び', 'ぶ', 'べ', 'ぼ',
-            'ぱ', 'ぴ', 'ぷ', 'ぺ', 'ぽ'
-        ]:
+            'ぱ', 'ぴ', 'ぷ', 'ぺ', 'ぽ',
+                        'ゔ'
+            ]:
             return [[], '', ['m']]
         elif next_syllable[0] in [
             'か', 'き', 'く', 'け', 'こ',
             'が', 'ぎ', 'ぐ', 'げ', 'ご'
-        ]:
-            return [[], '', ['ɴ']]
+            ]:
+            return [[], '', ['ŋ']]
+        elif next_syllable[0] in [
+            'や', 'ゆ', 'よ', 'わ', 'を'
+            ]:
+            return [[], '', ['ɰ̃']]
         elif next_syllable[0] in [
             'さ', 'し', 'す', 'せ', 'そ',
             'た', 'ち', 'つ', 'て', 'と'
-        ]:
-            return [[], '', ['n']]
+            ]:
+            return [[], '', ['n̪']]
         else:
             raise ValueError(f'Unsupported next syllable: {next_syllable}')
 
     raise NotImplementedError(f'unimplemented syllable: {syllable}, {next_syllable}')
 
 def Process(
-    score_path: str,
+    duration: list[float],
+    lyric: list[str],
+    pitch: list[int],
     sample_rate: int,
     hop_size: int
     ) -> list[Note]:
-    
-    score = music21.converter.parse(score_path)
-    current_tempo = music21.tempo.MetronomeMark(number= 100)
-
-    music = []
-    cumulative_time = 0.0
-
-    for part in score.parts:
-        previous_split = 1
-        for element in part.flatten():
-            if isinstance(element, music21.tempo.MetronomeMark):
-                current_tempo = element
-            elif isinstance(element, music21.note.Note):
-                note = librosa.note_to_midi(element.nameWithOctave.replace('-', '♭'))
-                if not element.lyric is None and '゛' in element.lyric:
-                    if element.lyric[0] == '゛':
-                        music[-1][1][2] = music[-1][1][:-1] + dakuten_fix(music[-1][1][-1])
-                        element.lyric = element.lyric[:-1]
-                    else:
-                        hakuten_index = element.lyric.index('゛')
-                        element.lyric = element.lyric[:max(0, hakuten_index - 2)] + dakuten_fix(element.lyric[hakuten_index - 1]) + element.lyric[hakuten_index + 1:]
-
-                if element.lyric is None:                        
-                    duration_seconds = get_duration_seconds(element.quarterLength, current_tempo)
-                    cumulative_time += duration_seconds
-                    if music[-1][2] == note:
-                        for previous_split_index in range(1, previous_split + 1):
-                            music[-previous_split_index] = (
-                                music[-previous_split_index][0] + duration_seconds / previous_split,
-                                music[-previous_split_index][1],
-                                music[-previous_split_index][2]
-                                )
-                    else:   # music[-1][0] != note, 28의 'つう', 47 'ろ' 체크
-                        if previous_split == 1:
-                            music.append((duration_seconds, remove_initial_consonant(music[-1][1]), note))
-                            if music[-2][1][-1] in ['ん', 'っ']:    # -2 is correct because of new score.
-                                music[-2] = (music[-2][0], music[-2][1][:-1], music[-2][2])
-                        elif previous_split == 2:
-                            if music[-1][1][-1] in ['ん', 'っ']:
-                                print(f'{score_path} is skipped.')
-                                return None
-                            music[-2] = (music[-2][0] + music[-1][0], music[-2][1], music[-2][2])
-                            music[-1] = (duration_seconds, music[-1][1], note)
-                        else:
-                            print(f'{score_path} is skipped.')
-                            return None
-                elif len(element.lyric) == 1:
-                    duration_seconds = get_duration_seconds(element.quarterLength, current_tempo)
-                    cumulative_time += duration_seconds
-                    lyric = element.lyric
-                    if element.lyric == 'ー':
-                        lyric = remove_initial_consonant(music[-1][1])
-                    elif element.lyric in ['ん', 'っ']:
-                        previous_syllable = [
-                            previous_syllable
-                            for _, previous_syllable, _ in music
-                            if previous_syllable != '<X>'][-1]  # sometime staccato makes problem.
-                        lyric = remove_initial_consonant(previous_syllable) + element.lyric                            
-                    music.append((duration_seconds, lyric, note))
-                    previous_split = 1
-                else:   # len(element.lyric) > 1
-                    lyrics = []
-                    for syllable in element.lyric:
-                        if not syllable in ['ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'ゕ', 'ゖ', 'っ', 'ゃ', 'ゅ', 'ょ', 'ゎ', 'ん'] or len(lyrics) == 0:
-                            lyrics.append([syllable])
-                        else:
-                            lyrics[-1].append(syllable)
-                    lyrics = [''.join(x) for x in lyrics]
-                    notes = [note] * len(lyrics)
-                    duration_seconds = [get_duration_seconds(element.quarterLength / len(lyrics), current_tempo)] * len(lyrics)
-                    cumulative_time += sum(duration_seconds)
-                    for note, duration, lyric in zip(notes, duration_seconds, lyrics):
-                        music.append((duration, lyric, note))                        
-                    previous_split = len(lyrics)
-            elif isinstance(element, music21.note.Rest):
-                duration_seconds = get_duration_seconds(element.quarterLength, current_tempo)
-                cumulative_time += duration_seconds
-                if len(music) > 0 and music[-1][2] == 0:
-                    music[-1] = (music[-1][0] + duration_seconds, music[-1][1], music[-1][2])
-                else:
-                    music.append((duration_seconds, '<X>', 0))
+    music = [x for x in zip(duration, lyric, pitch)]
 
     music = Japanese_G2P_Lyric(music)
     music = [
@@ -294,17 +221,6 @@ def Process(
             music = music[:-1]
         else:
             break
-
-    
-    for note in music:
-        if '' in note.Lyric:
-            # /mnt/f/Rawdata_Music/OFUTON_P_UTAGOE_DB/donguri_korokoro/donguri_korokoro.musicxml
-            if note.Lyric == ['', 'n']:
-                note.Lyric = ['n']  # coda only.
-            else:
-                for x in music:
-                    print(x)
-                assert False
 
     return music
 

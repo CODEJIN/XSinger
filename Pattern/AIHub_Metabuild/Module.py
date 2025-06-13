@@ -23,25 +23,35 @@ def _Korean_Phonemize(texts: Union[str, List[str]]):
         ]
     
     pronunciations = [
-        pronunciation.replace('x', '')
+        pronunciation.replace('kx', 'kʰ').replace('x', 'h').replace( '\u0361', '').replace('a̠', 'a').\
+            replace('we̞', 'wɛ').replace('o̞', 'o').replace('ʌ̹', 'ʌ').replace('ɕ', 's').replace('ɸʷ', 'ɸ').\
+            replace('wø̞', 'we').replace('kç', 'kʰ').replace('ç', 'h').replace('ɦ', 'h').replace('ɥi', 'wi').\
+            replace('ʃʰ', 'sʰ').replace('ɸ', 'p').replace('β', 'b').replace('ɣ', 'ɡ').replace('ʝ', 'dʑ').\
+            replace('ɲ', 'n').replace('ʎ', 'ɾ').replace('jɛ', 'je').replace('e̞', 'e').replace('ø̞', 'e').replace('ɭ', 'ɾ')
         for pronunciation in pronunciations
+        ]
+
+    pronunciations = [
+        pronunciation.replace('wɛ', 'we') if any([hgtk.letter.decompose(letter)[1] in ['ㅚ', 'ㅞ'] for letter in text]) else pronunciation
+        for text, pronunciation in zip(texts, pronunciations)
         ]
 
     return pronunciations
 
 korean_vowels = sorted(
-    list({'u', 'o̞', 'we̞', 'jo', 'i', 'ɯ', 'ø̞', 'wʌ̹', 'jʌ̹', 'ja̠', 'je̞', 'ɥi', 'ju', 'wa̠', 'ʌ̹', 'ɰi', 'e̞', 'a̠'}),
+    # list({'u', 'o', 'wɛ', 'jo', 'i', 'ɯ', 'ø', 'wʌ', 'jʌ', 'ja', 'je', 'wi', 'ju', 'wa', 'ʌ', 'ɰi', 'e', 'a', 'we'}),
+    list({'u', 'o', 'wɛ', 'jo', 'i', 'ɯ', 'ø', 'wʌ', 'jʌ', 'ja', 'je', 'wi', 'ju', 'wa', 'ʌ', 'ɰi', 'e', 'a', 'we'}),
     key= lambda x: len(x),
     reverse= True
     )
 korean_boundary_dict = {
-    't͡ɕ͈': ('', 't͡ɕ͈'), 'tʰ': ('', 'tʰ'), 'ç': ('', 'ç'), 't͈': ('', 't͈'), 's͈': ('', 's͈'), 'ɸʷ': ('', 'ɸʷ'), 
-    't': ('', 't'), 'ɕʰ': ('', 'ɕʰ'), 'ɸ': ('', 'ɸ'), 'm': ('', 'm'), 'sʰ': ('', 'sʰ'), 'kʰ': ('', 'kʰ'), 
-    'ʃʰ': ('', 'ʃʰ'), 'p͈': ('', 'p͈'), 'ɾ': ('', 'ɾ'), 'kç': ('', 'kç'), 'ɲ': ('', 'ɲ'), 't͡ɕʰ': ('', 't͡ɕʰ'), 
-    'p': ('', 'p'), 't͡ɕ': ('', 't͡ɕ'), 'n': ('', 'n'), 'pʰ': ('', 'pʰ'), 'k͈': ('', 'k͈'), 'ɕ͈': ('', 'ɕ͈'), 
-    'h': ('', 'h'), 'k': ('', 'k'), 'ɦ': ('', 'ɦ'), 'ɡ': ('', 'ɡ'), 'd': ('', 'd'), 'd͡ʑ': ('', 'd͡ʑ'),
+    'ts͈': ('', 'ts͈'), 'tʰ': ('', 'tʰ'), 't͈': ('', 't͈'), 's͈': ('', 's͈'), 'ɸʷ': ('', 'ɸʷ'), 
+    't': ('', 't'), 'sʰ': ('', 'sʰ'), 'ɸ': ('', 'ɸ'), 'm': ('', 'm'), 'sʰ': ('', 'sʰ'), 'kʰ': ('', 'kʰ'), 
+    'ʃʰ': ('', 'ʃʰ'), 'p͈': ('', 'p͈'), 'ɾ': ('', 'ɾ'), 'ɲ': ('', 'ɲ'), 'tsʰ': ('', 'tsʰ'), 
+    'p': ('', 'p'), 'ts': ('', 'ts'), 'n': ('', 'n'), 'pʰ': ('', 'pʰ'), 'k͈': ('', 'k͈'), 
+    'h': ('', 'h'), 'k': ('', 'k'), 'ɡ': ('', 'ɡ'), 'd': ('', 'd'), 'dʑ': ('', 'dʑ'),
     'ʎ': ('', 'ʎ'), 'b': ('', 'b'), 'ɣ': ('', 'ɣ'), 'β': ('', 'β'), 'ʝ': ('', 'ʝ'),
-    'ɭ': ('ɭ', ''), 'k̚': ('k', ''), 'ŋ': ('ŋ', ''), 'p̚': ('p', ''), 't̚': ('t', ''),
+    'k̚': ('k', ''), 'ŋ': ('ŋ', ''), 'p̚': ('p', ''), 't̚': ('t', ''),
     }
 
 def _Korean_Split_Vowel(pronunciation: str):
@@ -67,7 +77,7 @@ def _Korean_Syllablize(pronunciation: str):
     current_consonants = []
     if any(
         x in pronunciation and pronunciation[-1] != x
-        for x in ['ɭ', 'k̚', 'p̚', 't̚']
+        for x in ['k̚', 'p̚', 't̚']
         ):
         print(pronunciation)
         assert False
@@ -78,7 +88,7 @@ def _Korean_Syllablize(pronunciation: str):
                 len(syllables) > 0 and \
                 (   
                     len(current_consonants) > 1 or
-                    (len(current_consonants) > 0 and current_consonants[0] in ['ɭ', 'ŋ'])
+                    (len(current_consonants) > 0 and current_consonants[0] in ['ŋ'])
                     ):
                 syllables[-1][2].append(current_consonants[0])
                 current_consonants = current_consonants[1:]
@@ -136,7 +146,7 @@ def Korean_G2P_Lyric(music):
 
     return music
 
-nucleus_long_sound_convert_dict = {'ㅐ': 'ㅔ', 'ㅒ': 'ㅔ', 'ㅖ': 'ㅔ', 'ㅚ': 'ㅞ', 'ㅙ': 'ㅞ', 'ㅢ': 'ㅣ'}
+
 def Process(
     json_path: str,
     sample_rate: int,
@@ -180,16 +190,16 @@ def Process(
             change_previous_coda = False
             if previous_coda == '': # 단순 장음
                 onset = 'ㅇ'
-                nucleus = nucleus_long_sound_convert_dict.get(previous_nucleus, previous_nucleus)
+                nucleus = previous_nucleus
                 coda = ''
             elif previous_coda != '' and next_onset == 'ㅇ' and previous_nucleus == next_nucleus: # 장음의 중간일 가능성이 높음, previous coda가 이쪽의 onset으로 옮겨져야 함
                 onset = previous_coda
-                nucleus = nucleus_long_sound_convert_dict.get(previous_nucleus, previous_nucleus)
+                nucleus = previous_nucleus
                 coda = ''
                 change_previous_coda = True
             elif previous_coda != '' and next_onset == 'ㅇ' and previous_nucleus != next_nucleus: # 장음의 끝일 가능성이 높음, previous coda가 이쪽의 coda로 옮겨져야 함
                 onset = 'ㅇ'
-                nucleus = nucleus_long_sound_convert_dict.get(previous_nucleus, previous_nucleus)
+                nucleus = previous_nucleus
                 coda = previous_coda
                 change_previous_coda = True
             elif previous_coda != '' and next_onset != 'ㅇ': # 세 음절 중 소실된 가운데 음절일 가능성이 높음, previous coda가 이쪽으로 옮겨져야 함

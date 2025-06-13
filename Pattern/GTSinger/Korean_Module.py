@@ -3,28 +3,53 @@ from typing import List, Dict, Union, Optional, Tuple
 
 from .. import Note, Convert_Duration_Second_to_Frame, Convert_Lyric_Syllable_to_Sequence
 
-def remove_diacritics(ipa: str):
+def remove_diacritics_and_fix(ipa: str):
     return ipa.replace('_ko', '').replace('\u031A', '').replace('ː', '')
 
 def _Syllablize(
     pronunciation: list[str]
-    ) -> List[Tuple[List[str], str, List[str]]]:
-    use_vowels = ['ɨ', 'ɛ', 'ɐ', 'i', 'ʌ', 'o', 'e', 'u', 'ɰ']
+    ) -> List[Tuple[List[str], List[str], List[str]]]:
+    use_vowels = ['ɯ', 'e', 'a', 'i', 'ʌ', 'o', 'e', 'u']
+    
+    convert_phoneme = {
+        'c': 'ts',
+        'cʰ': 'tsʰ',
+        'c͈': 'ts͈',
+        'tɕ': 'ts',
+        'tɕʰ': 'tsʰ',
+        'tɕ͈': 'ts͈',
+        'ç': 'h',
+        'ɦ': 'h',
+        'ɸ': 'p',
+        'ɭ': 'ɾ',
+        'ɲ': 'n',
+        'x': 'h',
+        'ɨ': 'ɯ',
+        'ɐ': 'a',
+        'ɕ': 's',
+        'ɕʰ': 'sʰ',
+        'ɕ͈': 's͈',
+        'ɰ': 'ɯ',
+        'ɥ': 'w',
+        'ɛ': 'e'
+        }
 
     syllable_list: List[Tuple[List[str], str, List[str]]] = []
 
     onsets = []
-    nucleus = None
+    nucleus = []
     index = 0
     while index < len(pronunciation):
-        phoneme = pronunciation[index]
+        phoneme = convert_phoneme.get(pronunciation[index], pronunciation[index])
         if not phoneme in use_vowels:
             onsets.append(phoneme)
         else:   # vowel
-            nucleus = phoneme
+            while len(onsets) > 0 and onsets[-1] in ['w', 'j', 'ɥ']:
+                nucleus.append(onsets.pop())
+            nucleus.append(phoneme)
             syllable_list.append((onsets, nucleus, []))
             onsets = []
-            nucleus = None
+            nucleus = []
         index += 1
 
     syllable_list[-1] = (syllable_list[-1][0], syllable_list[-1][1], onsets)
@@ -85,7 +110,8 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
         mix_tech_list, falsetto_tech_list, breathy_tech_list,
         pharyngeal_tech_list, vibrato_tech_list, glissando_tech_list 
         ):
-        ipa_list_0[phoneme_to_word].append(remove_diacritics(ipa))
+        ipa = remove_diacritics_and_fix(ipa)        
+        ipa_list_0[phoneme_to_word].append(remove_diacritics_and_fix(ipa))
         note_list_0[phoneme_to_word].append(phoneme_note)
         duration_list_0[phoneme_to_word].append(phoneme_duration)
         mix_tech_list_0[phoneme_to_word].append(mix_tech)
@@ -94,13 +120,36 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
         pharyngeal_tech_list_0[phoneme_to_word].append(pharyngeal_tech)
         vibrato_tech_list_0[phoneme_to_word].append(vibrato_tech)
         glissando_tech_list_0[phoneme_to_word].append(glissando_tech)
+        
+        if ipa[-1] in ['\u02B2', '\u02B7']:
+            ipa_list_0[phoneme_to_word].pop()
+            ipa_list_0[phoneme_to_word].append(ipa[:-1])
+            if ipa[-1] == '\u02B2':
+                ipa_list_0[phoneme_to_word].append('j')
+            elif ipa[-1] == '\u02B7':
+                ipa_list_0[phoneme_to_word].append('w')            
+            note_list_0[phoneme_to_word].append(note_list_0[phoneme_to_word][-1])
+            duration_list_0[phoneme_to_word].append(0.0)
+            mix_tech_list_0[phoneme_to_word].append(mix_tech_list_0[phoneme_to_word][-1])
+            falsetto_tech_list_0[phoneme_to_word].append(falsetto_tech_list_0[phoneme_to_word][-1])
+            breathy_tech_list_0[phoneme_to_word].append(breathy_tech_list_0[phoneme_to_word][-1])
+            pharyngeal_tech_list_0[phoneme_to_word].append(pharyngeal_tech_list_0[phoneme_to_word][-1])
+            vibrato_tech_list_0[phoneme_to_word].append(vibrato_tech_list_0[phoneme_to_word][-1])
+            glissando_tech_list_0[phoneme_to_word].append(glissando_tech_list_0[phoneme_to_word][-1])
+
+    note_list_0 = [
+        [
+            phoneme_note[note_index + 1] if phoneme_note[note_index] is None else phoneme_note[note_index]
+            for note_index in range(len(phoneme_note))
+            ]
+        for phoneme_note in note_list_0
+        ]   # the note of 'j', 'w' is changed from None to next vowel's note.
 
     try:
         ipa_list_0 = [
-            ['<X>'] if x[0] in ['<SP>', '<AP>'] else _Syllablize(x)
+            [['<X>',]] if x[0] in ['<SP>', '<AP>'] else _Syllablize(x)
             for x in ipa_list_0
             ]
-
     except Exception as e:
         print('{} is skipped.'.format(metadata['item_name']))
         return None, None
@@ -125,12 +174,12 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
         breathy_tech_list_0, pharyngeal_tech_list_0,
         vibrato_tech_list_0, glissando_tech_list_0
         ):
-        num_syllable = len(ipa) if ipa != ['<X>'] else 1
+        num_syllable = len(ipa) if ipa[0] != '<X>' else 1
 
         num_phonemes = [
-            len(onsets) + (nucleus != '') + len(coda)
+            len(onsets) + 1 + len(coda)
             for onsets, nucleus, coda in ipa
-            ] if ipa != ['<X>'] else [1]
+            ] if ipa[0][0] != '<X>' else [1]
 
         if num_syllable == 1 and len(phoneme_note) > 1:
             text_list_1.append('<X>' if text in ['<SP>', '<AP>'] else text)
@@ -214,7 +263,7 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
                     ipa = current_ipa.pop()
                     current_ipa.extend([(ipa[0], ipa[1], []), ([], ipa[1], ipa[2])])
                 else:
-                    assert False    # ?                        
+                    assert False    # ?
                 current_note.append(note)
                 current_duration.append(phoneme_duration[note_index])
                 current_mix_tech.append(mix_tech[note_index])
@@ -243,6 +292,25 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
     vibrato_tech_list = [max(0, min(1, x)) for x in vibrato_tech_list]
     glissando_tech_list = [max(0, min(1, x)) for x in glissando_tech_list]
     
+    # solve some diacritic like pʷpʷ ('봐', (['p', 'w', 'p'], ['w', 'a'], []), 70, 0.268) -> (['p'], ['w', 'a'], [])
+    for ipa in ipa_list:
+        if 'j'  in ipa[0]:
+            phoneme_index = ipa[0].index('j')
+            if ipa[0][phoneme_index - 1] == ipa[0][phoneme_index + 1]:
+                ipa[0].pop(phoneme_index)
+                ipa[0].pop(phoneme_index)
+        if 'w'  in ipa[0]:
+            phoneme_index = ipa[0].index('w')
+            if ipa[0][phoneme_index - 1] == ipa[0][phoneme_index + 1]:
+                ipa[0].pop(phoneme_index)
+                ipa[0].pop(phoneme_index)
+
+    #diphone concat
+    ipa_list =  [
+        (ipa[0], ''.join(ipa[1]), ipa[2]) if len(ipa) == 3 else ipa
+        for ipa in ipa_list
+        ]
+
     music = [
         Note(
             Duration= duration,
@@ -255,12 +323,63 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
             duration_list, ipa_list, note_list, text_list
             )
         ]
+        
     music = Convert_Duration_Second_to_Frame(
         music= music,
         sample_rate= sample_rate,
         hop_size= hop_size
         )
     music = Convert_Lyric_Syllable_to_Sequence(music)
+    
+    for note in music:
+        new_lyric = []
+        for phoneme in note.Lyric:
+            while 'jj' in phoneme:
+                phoneme = phoneme.replace('jj', 'j')
+            while 'ww' in phoneme:
+                phoneme = phoneme.replace('ww', 'w')
+            while 'ji' in phoneme:
+                phoneme = phoneme.replace('ji', 'i')
+            while 'jɛ' in phoneme:
+                phoneme = phoneme.replace('jɛ', 'je')
+            while 'wo' in phoneme:
+                phoneme = phoneme.replace('wo', 'o')
+            while 'wu' in phoneme:
+                phoneme = phoneme.replace('wu', 'u')            
+            new_lyric.append(phoneme)
+
+        note.Lyric = new_lyric
+            
+    for note in music:
+        while len(note.Lyric) > 1 and note.Lyric[0] == note.Lyric[1]:
+            note.Lyric.pop(0)
+        while len(note.Lyric) > 1 and note.Lyric[-1] == note.Lyric[-2]:
+            note.Lyric.pop()
+
+    note_index = 1
+    while note_index < len(music):
+        if note_index > 0 and music[note_index].Text == '<SLUR>' and music[note_index].Lyric[0] != music[note_index -1].Lyric[-1]:
+            if len(music[note_index -1].Lyric[-1]) > 1 and music[note_index -1].Lyric[-1][1] == music[note_index].Lyric[0]:
+                music[note_index].Lyric[0] = music[note_index -1].Lyric[-1]
+            elif music[note_index -1].Lyric[-1] == 'ɯ' and music[note_index].Lyric[0] == 'i':
+                music[note_index -1].Lyric[-1] = 'ɯi'
+                music[note_index].Lyric[0] = 'ɯi'
+            else:
+                for x in music:
+                    print(x)
+                assert False
+        if note_index > 0 and \
+            music[note_index].Text == '<SLUR>' and \
+            music[note_index].Lyric == music[note_index -1].Lyric and \
+            music[note_index].Pitch == music[note_index -1].Pitch:
+            music[note_index -1].Duration += music[note_index].Duration
+            music.pop(note_index)
+            note_index -= 1
+        note_index += 1
+        
+    for note in music:
+        while  'ɯi' in note.Lyric:
+            note.Lyric[note.Lyric.index('ɯi')] = 'ɰi'
     
     # GTSinger has the tech info.
     tech = np.array([
@@ -273,4 +392,3 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
         ])
     
     return music, tech
-

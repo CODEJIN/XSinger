@@ -504,7 +504,7 @@ def Token_Dict_Generate(hp: Namespace, tokens: List[str]):
         open(os.path.join(hp.Dataset_Path, hp.Token_Path), 'w', encoding='utf-8-sig'),
         allow_unicode= True
         )
-    
+
 
 def CSD_Process(
     hyper_parameters: Namespace,
@@ -514,9 +514,12 @@ def CSD_Process(
     hp = hyper_parameters
 
     processed_list_path = os.path.join(hp.Dataset_Path, 'Processed.txt')
+    skipped_list_path = os.path.join(hp.Dataset_Path, 'Skipped.txt')
     processed_list = []
     if os.path.exists(processed_list_path):
-        processed_list = [x.strip() for x in open(processed_list_path, 'r').readlines()]
+        processed_list = \
+            [x.strip() for x in open(processed_list_path, 'r', encoding= 'utf-8-sig').readlines()] + \
+            [x.strip() for x in open(skipped_list_path, 'r', encoding= 'utf-8-sig').readlines()]
 
     korean_paths = []
     for root, _, files in os.walk(os.path.join(dataset_path, 'korean', 'wav')):
@@ -585,9 +588,8 @@ def CSD_Process(
             )
 
         if is_generated:
-            with open(processed_list_path, 'a') as f:
+            with open(processed_list_path, 'a', encoding= 'utf-8-sig') as f:
                 f.write(wav_path + '\n')
-
 
     english_paths = []
     for root, _, files in os.walk(os.path.join(dataset_path, 'english', 'wav')):
@@ -658,7 +660,7 @@ def CSD_Process(
             )
 
         if is_generated:
-            with open(processed_list_path, 'a') as f:
+            with open(processed_list_path, 'a', encoding= 'utf-8-sig') as f:
                 f.write(wav_path + '\n')
 
 def AIHub_Mediazen_Process(
@@ -669,9 +671,12 @@ def AIHub_Mediazen_Process(
     hp = hyper_parameters
 
     processed_list_path = os.path.join(hp.Dataset_Path, 'Processed.txt')
+    skipped_list_path = os.path.join(hp.Dataset_Path, 'Skipped.txt')
     processed_list = []
     if os.path.exists(processed_list_path):
-        processed_list = [x.strip() for x in open(processed_list_path, 'r').readlines()]
+        processed_list = \
+            [x.strip() for x in open(processed_list_path, 'r', encoding= 'utf-8-sig').readlines()] + \
+            [x.strip() for x in open(skipped_list_path, 'r', encoding= 'utf-8-sig').readlines()]
 
     path_dict = {}
     for root, _, files in os.walk(os.path.join(dataset_path)):
@@ -703,7 +708,7 @@ def AIHub_Mediazen_Process(
         'TR': 'Trot'
         }
     
-    eval_cycle = int(len(paths) * 0.001)
+    eval_cycle = len(paths) // int(len(paths) * 0.001)
     for pattern_index, (wav_path, midi_path, genre, singer) in tqdm(
         enumerate(paths),
         total= len(paths),
@@ -732,6 +737,8 @@ def AIHub_Mediazen_Process(
 
         if abs(music_length - audio_length) > hyper_parameters.Sound.Sample_Rate:
             logging.warning(f'{midi_path} is skipped because of async between audio and midi.({music_length} vs {audio_length})')
+            with open(skipped_list_path, 'a', encoding= 'utf-8-sig') as f:
+                f.write(wav_path + '\n')
             continue
         elif music_length < audio_length:
             audio = audio[:music_length]
@@ -761,7 +768,7 @@ def AIHub_Mediazen_Process(
             )
 
         if is_generated:
-            with open(processed_list_path, 'a') as f:
+            with open(processed_list_path, 'a', encoding= 'utf-8-sig') as f:
                 f.write(wav_path + '\n')
 
 def AIHub_Metabuild_Process(
@@ -772,9 +779,12 @@ def AIHub_Metabuild_Process(
     hp = hyper_parameters
 
     processed_list_path = os.path.join(hp.Dataset_Path, 'Processed.txt')
+    skipped_list_path = os.path.join(hp.Dataset_Path, 'Skipped.txt')
     processed_list = []
     if os.path.exists(processed_list_path):
-        processed_list = [x.strip() for x in open(processed_list_path, 'r').readlines()]
+        processed_list = \
+            [x.strip() for x in open(processed_list_path, 'r', encoding= 'utf-8-sig').readlines()] + \
+            [x.strip() for x in open(skipped_list_path, 'r', encoding= 'utf-8-sig').readlines()]
 
     wav_path_dict, json_path_dict = {}, {}
     for root, _, files in os.walk(dataset_path):
@@ -791,7 +801,7 @@ def AIHub_Metabuild_Process(
         ])
     
 
-    eval_cycle = int(len(paths) * 0.001)
+    eval_cycle = len(paths) // int(len(paths) * 0.001)
     for pattern_index, (wav_path, json_path) in tqdm(
         enumerate(paths),
         total= len(paths),
@@ -823,6 +833,8 @@ def AIHub_Metabuild_Process(
             audio = audio[:music_length]    # AIHub Metabuild's last silence is no tagged.
         elif music_length - audio_length > hyper_parameters.Sound.Sample_Rate:
             logging.warning(f'{json_path} is skipped because of async between audio and midi.({music_length} vs {audio_length})')
+            with open(skipped_list_path, 'a', encoding= 'utf-8-sig') as f:
+                f.write(wav_path + '\n')
             continue
         elif music_length > audio_length:
             cut_frame_size = (music_length - audio_length) // hyper_parameters.Sound.Hop_Size
@@ -850,7 +862,7 @@ def AIHub_Metabuild_Process(
             )
 
         if is_generated:
-            with open(processed_list_path, 'a') as f:
+            with open(processed_list_path, 'a', encoding= 'utf-8-sig') as f:
                 f.write(wav_path + '\n')
 
 def M4Singer_Process(
@@ -861,9 +873,12 @@ def M4Singer_Process(
     hp = hyper_parameters
 
     processed_list_path = os.path.join(hp.Dataset_Path, 'Processed.txt')
+    skipped_list_path = os.path.join(hp.Dataset_Path, 'Skipped.txt')
     processed_list = []
     if os.path.exists(processed_list_path):
-        processed_list = [x.strip() for x in open(processed_list_path, 'r').readlines()]
+        processed_list = \
+            [x.strip() for x in open(processed_list_path, 'r', encoding= 'utf-8-sig').readlines()] + \
+            [x.strip() for x in open(skipped_list_path, 'r', encoding= 'utf-8-sig').readlines()]
 
     wav_paths = sorted([
         os.path.join(root, file)
@@ -880,7 +895,7 @@ def M4Singer_Process(
         for wav_path in wav_paths
         ]
     
-    eval_cycle = int(len(wav_paths) * 0.001)
+    eval_cycle = len(wav_paths) // int(len(wav_paths) * 0.001)
     for pattern_index, (wav_path, midi_path, tg_path) in tqdm(
         enumerate(zip(wav_paths, midi_paths, tg_paths)),
         total= len(wav_paths),
@@ -916,6 +931,8 @@ def M4Singer_Process(
         
         if abs(music_length - audio_length) > hp.Sound.Sample_Rate:
             logging.warning(f'{midi_path} is skipped because of async between audio and midi.({music_length} vs {audio_length})')
+            with open(skipped_list_path, 'a', encoding= 'utf-8-sig') as f:
+                f.write(wav_path + '\n')
             continue
         elif music_length < audio_length:
             audio = audio[:music_length]
@@ -945,7 +962,7 @@ def M4Singer_Process(
             )
 
         if is_generated:
-            with open(processed_list_path, 'a') as f:
+            with open(processed_list_path, 'a', encoding= 'utf-8-sig') as f:
                 f.write(wav_path + '\n')
 
 def OpenCPop_Process(
@@ -956,9 +973,12 @@ def OpenCPop_Process(
     hp = hyper_parameters
 
     processed_list_path = os.path.join(hp.Dataset_Path, 'Processed.txt')
+    skipped_list_path = os.path.join(hp.Dataset_Path, 'Skipped.txt')
     processed_list = []
     if os.path.exists(processed_list_path):
-        processed_list = [x.strip() for x in open(processed_list_path, 'r').readlines()]
+        processed_list = \
+            [x.strip() for x in open(processed_list_path, 'r', encoding= 'utf-8-sig').readlines()] + \
+            [x.strip() for x in open(skipped_list_path, 'r', encoding= 'utf-8-sig').readlines()]
 
     for script_file, is_eval in [('train.txt', False), ('test.txt', True)]:
         lines = open(
@@ -997,6 +1017,8 @@ def OpenCPop_Process(
 
             if abs(music_length - audio_length) > hp.Sound.Sample_Rate:
                 logging.warning(f'{script_file} is skipped because of async between audio and midi.({music_length} vs {audio_length})')
+                with open(skipped_list_path, 'a', encoding= 'utf-8-sig') as f:
+                    f.write(wav_path + '\n')
                 continue
             elif music_length < audio_length:
                 audio = audio[:music_length]
@@ -1026,7 +1048,7 @@ def OpenCPop_Process(
                 )
             
             if is_generated:
-                with open(processed_list_path, 'a') as f:
+                with open(processed_list_path, 'a', encoding= 'utf-8-sig') as f:
                     f.write(wav_path + '\n')
 
 def Kiritan_Process(
@@ -1037,9 +1059,12 @@ def Kiritan_Process(
     hp = hyper_parameters
 
     processed_list_path = os.path.join(hp.Dataset_Path, 'Processed.txt')
+    skipped_list_path = os.path.join(hp.Dataset_Path, 'Skipped.txt')
     processed_list = []
     if os.path.exists(processed_list_path):
-        processed_list = [x.strip() for x in open(processed_list_path, 'r').readlines()]
+        processed_list = \
+            [x.strip() for x in open(processed_list_path, 'r', encoding= 'utf-8-sig').readlines()] + \
+            [x.strip() for x in open(skipped_list_path, 'r', encoding= 'utf-8-sig').readlines()]
 
     music_label_dict = {
         1: 'Color',
@@ -1159,7 +1184,7 @@ def Kiritan_Process(
             )
 
         if is_generated:
-            with open(processed_list_path, 'a') as f:
+            with open(processed_list_path, 'a', encoding= 'utf-8-sig') as f:
                 f.write(wav_path + '\n')
 
 def Ofuton_Process(
@@ -1170,9 +1195,12 @@ def Ofuton_Process(
     hp = hyper_parameters
 
     processed_list_path = os.path.join(hp.Dataset_Path, 'Processed.txt')
+    skipped_list_path = os.path.join(hp.Dataset_Path, 'Skipped.txt')
     processed_list = []
     if os.path.exists(processed_list_path):
-        processed_list = [x.strip() for x in open(processed_list_path, 'r').readlines()]
+        processed_list = \
+            [x.strip() for x in open(processed_list_path, 'r', encoding= 'utf-8-sig').readlines()] + \
+            [x.strip() for x in open(skipped_list_path, 'r', encoding= 'utf-8-sig').readlines()]
 
     paths = []
     for root, _, files in os.walk(dataset_path):
@@ -1237,7 +1265,7 @@ def Ofuton_Process(
             )
 
         if is_generated:
-            with open(processed_list_path, 'a') as f:
+            with open(processed_list_path, 'a', encoding= 'utf-8-sig') as f:
                 f.write(wav_path + '\n')
 
 def GTSinger_Process(
@@ -1248,9 +1276,12 @@ def GTSinger_Process(
     hp = hyper_parameters
 
     processed_list_path = os.path.join(hp.Dataset_Path, 'Processed.txt')
+    skipped_list_path = os.path.join(hp.Dataset_Path, 'Skipped.txt')
     processed_list = []
     if os.path.exists(processed_list_path):
-        processed_list = [x.strip() for x in open(processed_list_path, 'r').readlines()]
+        processed_list = \
+            [x.strip() for x in open(processed_list_path, 'r', encoding= 'utf-8-sig').readlines()] + \
+            [x.strip() for x in open(skipped_list_path, 'r', encoding= 'utf-8-sig').readlines()]
 
     with open(os.path.join(dataset_path, 'processed', 'All', 'metadata.json'), 'r', encoding= 'utf-8-sig') as f:
         metadata_list = json.load(f)
@@ -1258,11 +1289,12 @@ def GTSinger_Process(
         metadata
         for metadata in metadata_list
         if metadata['language'] in [
-            'Chinese', 'English', 'Japanese', 'Korean',
-            # 'Spanish', 'French', 'German', 'Italian', 'Russian'
+            'Chinese', 'English', 'Korean',
+            # 'Spanish', 'French', 'German', 'Italian', 'Russian',
+            # 'Japanese', -> the Japanese kanji phonemes in GTSinger are incorrect. This cannot be use now.
             ]
         ]
-    eval_cycle = int(len(metadata_list) * 0.001)
+    eval_cycle = len(metadata_list) // int(len(metadata_list) * 0.001)
 
     for pattern_index, metadata in tqdm(
         enumerate(metadata_list),
@@ -1307,6 +1339,8 @@ def GTSinger_Process(
             assert False
 
         if music is None:
+            with open(skipped_list_path, 'a', encoding= 'utf-8-sig') as f:
+                f.write(wav_path + '\n')
             continue
 
         audio = Load_Audio(
@@ -1347,7 +1381,7 @@ def GTSinger_Process(
             )
 
         if is_generated:
-            with open(processed_list_path, 'a') as f:
+            with open(processed_list_path, 'a', encoding= 'utf-8-sig') as f:
                 f.write(wav_path + '\n')
 
 def Metadata_Generate(
@@ -1503,7 +1537,6 @@ def Metadata_Generate(
             f0_dict,
             open(os.path.join(hp.Dataset_Path, hp.F0_Info_Path), 'w')
             )
-
         Token_Dict_Generate(hp, sorted(list(set(tokens))))
 
         singer_index_dict = {
@@ -1564,6 +1597,17 @@ if __name__ == '__main__':
         device = torch.device('cuda:0')
         rmvpe_model = torch.jit.load('rmvpe_cuda.pts', map_location= 'cuda:0')
         tech_detector_model = torch.jit.load('Tech_Detector.pts', map_location= 'cuda:0')
+
+
+    processed_list_path = os.path.join(hp.Dataset_Path, 'Processed.txt')
+    skipped_list_path = os.path.join(hp.Dataset_Path, 'Skipped.txt')
+    os.makedirs(hp.Dataset_Path, exist_ok= True)
+    if not os.path.exists(processed_list_path):
+        with open(processed_list_path, 'w', encoding= 'utf-8-sig') as f:
+            f.write('')
+    if not os.path.exists(skipped_list_path):
+        with open(skipped_list_path, 'w', encoding= 'utf-8-sig') as f:
+            f.write('')
 
     if args.csd_path:
         CSD_Process(
@@ -1634,3 +1678,14 @@ if __name__ == '__main__':
 # python -m Pattern.Generator -hp Hyper_Parameters.yaml -ofuton /mnt/f/Rawdata_Music/OFUTON_P_UTAGOE_DB
 
 # python -m Pattern.Generator -hp Hyper_Parameters.yaml -csd /mnt/f/Rawdata_Music/CSD_1.1 -kiritan /mnt/f/Rawdata_Music/Kiritan -opencpop /mnt/e/OpenCPop
+
+
+# python -m Pattern.Generator -hp Hyper_Parameters.yaml \
+#     -csd /nas/SW/heejo.you/rawdata_music/CSD_1.1 \
+#     -amz /nas/SW/heejo.you/rawdata_music/AIHub_Mediazen \
+#     -amb /nas/SW/heejo.you/rawdata_music/AIHub_Metabuild \
+#     -m4 /nas/SW/heejo.you/rawdata_music/m4singer \
+#     -opencpop /nas/SW/heejo.you/rawdata_music/OpenCPop \
+#     -kiritan /nas/SW/heejo.you/rawdata_music/Kiritan \
+#     -ofuton /nas/SW/heejo.you/rawdata_music/OFUTON_P_UTAGOE_DB \
+#     -gtsinger /nas/SW/heejo.you/rawdata_music/GTSinger
