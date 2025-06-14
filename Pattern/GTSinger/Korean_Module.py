@@ -1,3 +1,4 @@
+import hgtk
 import numpy as np
 from typing import List, Dict, Union, Optional, Tuple
 
@@ -9,29 +10,25 @@ def remove_diacritics_and_fix(ipa: str):
 def _Syllablize(
     pronunciation: list[str]
     ) -> List[Tuple[List[str], List[str], List[str]]]:
-    use_vowels = ['ɯ', 'e', 'a', 'i', 'ʌ', 'o', 'e', 'u']
+    use_vowels = ['ɯ', 'e', 'a', 'i', 'ʌ', 'o', 'ɛ', 'u']
     
     convert_phoneme = {
-        'c': 'ts',
-        'cʰ': 'tsʰ',
-        'c͈': 'ts͈',
-        'tɕ': 'ts',
-        'tɕʰ': 'tsʰ',
-        'tɕ͈': 'ts͈',
+        'dʑ': 'tɕ',
+        'c': 'tɕ',
+        'cʰ': 'tɕʰ',
+        'c͈': 'tɕ͈',
         'ç': 'h',
         'ɦ': 'h',
-        'ɸ': 'p',
+        'ɸ': 'h',
         'ɭ': 'ɾ',
         'ɲ': 'n',
         'x': 'h',
         'ɨ': 'ɯ',
         'ɐ': 'a',
-        'ɕ': 's',
-        'ɕʰ': 'sʰ',
+        'ɕʰ': 's',
         'ɕ͈': 's͈',
         'ɰ': 'ɯ',
-        'ɥ': 'w',
-        'ɛ': 'e'
+        'sʰ': 's',
         }
 
     syllable_list: List[Tuple[List[str], str, List[str]]] = []
@@ -150,7 +147,7 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
             [['<X>',]] if x[0] in ['<SP>', '<AP>'] else _Syllablize(x)
             for x in ipa_list_0
             ]
-    except Exception as e:
+    except IndexError as e: # Some phoneme does not have nucleus in GTSinger.
         print('{} is skipped.'.format(metadata['item_name']))
         return None, None
 
@@ -323,7 +320,7 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
             duration_list, ipa_list, note_list, text_list
             )
         ]
-        
+
     music = Convert_Duration_Second_to_Frame(
         music= music,
         sample_rate= sample_rate,
@@ -376,11 +373,23 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
             music.pop(note_index)
             note_index -= 1
         note_index += 1
-        
+
     for note in music:
-        while  'ɯi' in note.Lyric:
+        if hgtk.checker.is_hangul(note.Text):
+            if hgtk.letter.decompose(note.Text)[1] == 'ㅙ':   # ko_pron does not consider 'wɛ'
+                note.Lyric[note.Lyric.index('we')] = 'wɛ'
+            elif hgtk.letter.decompose(note.Text)[1] == 'ㅒ':
+                note.Lyric[note.Lyric.index('je')] = 'jɛ'
+
+        while 'ɯi' in note.Lyric:
             note.Lyric[note.Lyric.index('ɯi')] = 'ɰi'
-    
+        while 'jʌ' in note.Lyric:
+            note.Lyric[note.Lyric.index('jʌ')] = 'jɔ'
+        while 'ɥi' in note.Lyric:
+            note.Lyric[note.Lyric.index('ɥi')] = 'wi'
+        while 'ɥɥi' in note.Lyric:
+            note.Lyric[note.Lyric.index('ɥɥi')] = 'wi'
+
     # GTSinger has the tech info.
     tech = np.array([
         mix_tech_list,
