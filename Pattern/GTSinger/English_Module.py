@@ -86,7 +86,7 @@ def _English_Syllablize(
     # /ʔ/ is not vowel.
     # However, in English, the next vowel of /ʔ/ is usually silence /ə/.
     # To rule make, I manage /ʔ/ like a vowel
-    diphones = ['tʃ', 'hw', 'aʊ', 'kw', 'eɪ', 'oʊ', 'dʒ', 'ɔɪ', 'aɪ']
+    diphones = ['tʃ', 'hw', 'aʊ', 'eɪ', 'oʊ', 'dʒ', 'ɔɪ', 'aɪ']
     use_vowels = [
         'aʊ', 'eɪ', 'oʊ', 'ɔɪ', 'aɪ', 'a', 'e', 'i', 'o', 'u', 
         'æ', 'ɐ', 'ɑ', 'ɔ', 'ə', 'ɛ', 'ɜ', 'ɪ', 'ʊ', 'ʌ', 'ᵻ', 'ɚ', 'ʔ', 
@@ -187,7 +187,7 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
         else:
             ipa = _English_Syllablize(_English_Phonemize(texts= text)[0])
             ipa_list_0.append(ipa)
-    
+
     text_list_1 = []
     ipa_list_1 = []
     note_list_1 = []
@@ -348,6 +348,20 @@ def Process(metadata: dict, sample_rate: int, hop_size: int) -> tuple[list[Note]
     for note in music:
         while '\u0329' in note.Lyric:
             note.Lyric.pop(note.Lyric.index('\u0329'))
+
+    for index, note in enumerate(music):
+        while 'ᵻ' in note.Lyric:
+            note.Lyric[note.Lyric.index('ᵻ')] = 'ɪ'
+
+        if 'ɜ' in note.Lyric and 'ɹ' in note.Lyric and note.Lyric[note.Lyric.index('ɜ') + 1] == 'ɹ':
+            target_index = note.Lyric.index('ɜ')
+            note.Lyric.pop(target_index + 1)
+            note.Lyric.pop(target_index)
+            note.Lyric.insert(target_index, 'ɝ')
+
+        if ' ' in note.Lyric:   # English#EN-Tenor-1#Mixed_Voice_and_Falsetto#Lavender Haze#????#0004
+            print('{} is skipped.'.format(metadata['item_name']))
+            return None, None
     
     # GTSinger has the tech info.
     tech = np.array([

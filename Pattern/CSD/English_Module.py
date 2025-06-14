@@ -9,7 +9,8 @@ def English_Phoneme_Split(
     # /ʔ/ is not vowel.
     # However, in English, the next vowel of /ʔ/ is usually silence /ə/.
     # To rule make, I manage /ʔ/ like a vowel
-    diphones = ['tʃ', 'hw', 'aʊ', 'kw', 'eɪ', 'oʊ', 'dʒ', 'ɔɪ', 'aɪ']
+    # diphones = ['tʃ', 'hw', 'aʊ', 'kw', 'eɪ', 'oʊ', 'dʒ', 'ɔɪ', 'aɪ']
+    diphones = ['tʃ', 'hw', 'aʊ', 'eɪ', 'oʊ', 'dʒ', 'ɔɪ', 'aɪ']
     use_vowels = [
         'aʊ', 'eɪ', 'oʊ', 'ɔɪ', 'aɪ', 'e', 'i', 'o', 'u', 'ɐ', 'a',
         'æ', 'ɑ', 'ɔ', 'ə', 'ɛ', 'ɜ', 'ɪ', 'ʊ', 'ʌ', 'ᵻ', 'ɚ', 'ʔ', 
@@ -103,4 +104,29 @@ def Process(
         )
     music = Convert_Lyric_Syllable_to_Sequence(music)
     
+    for index, note in enumerate(music):
+        if 'e' == note.Lyric[-1] and 'eɪ' == music[index + 1].Lyric[0]:
+            note.Lyric[-1] = 'eɪ'
+        elif 'e' == note.Lyric[-1] and 'ɪ' == music[index + 1].Lyric[0]:
+            print(midi_path)
+            note.Lyric[-1] = 'eɪ'
+            music[index + 1].Lyric[0] = 'eɪ'
+        
+        while 'ᵻ' in note.Lyric:
+            note.Lyric[note.Lyric.index('ᵻ')] = 'ɪ'
+
+        if 'ɜ' in note.Lyric and 'ɹ' in note.Lyric and note.Lyric[note.Lyric.index('ɜ') + 1] == 'ɹ':
+            target_index = note.Lyric.index('ɜ')
+            note.Lyric.pop(target_index + 1)
+            note.Lyric.pop(target_index)
+            note.Lyric.insert(target_index, 'ɝ')
+            
+    for index, note in enumerate(music):
+        if 'ɜ' in note.Lyric and 'ɹ' in note.Lyric:
+            print(midi_path)
+            print(music[index - 1])
+            print(note)
+            print(music[index + 1])
+            assert False
+
     return music
