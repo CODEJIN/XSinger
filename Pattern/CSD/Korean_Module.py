@@ -1,8 +1,5 @@
-import os
-from argparse import Namespace
-import numpy as np
 import pandas as pd
-from typing import List, Dict, Union, Optional, Tuple
+from typing import List, Union
 from ko_pron import romanise
 import hgtk
 
@@ -24,36 +21,65 @@ def _Korean_Phonemize(texts: Union[str, List[str]]):
         ]
     
     pronunciations = [
-        pronunciation.replace('kx', 'kʰ').replace('x', 'h').replace( '\u0361', '').replace('a̠', 'a').\
-            replace('we̞', 'wɛ').replace('o̞', 'o').replace('ʌ̹', 'ʌ').replace('ɕ', 's').replace('ɸʷ', 'ɸ').\
-            replace('wø̞', 'we').replace('kç', 'kʰ').replace('ç', 'h').replace('ɦ', 'h').replace('ɥi', 'wi').\
-            replace('ʃʰ', 'sʰ').replace('ɸ', 'p').replace('β', 'b').replace('ɣ', 'ɡ').replace('ʝ', 'dʑ').\
-            replace('ɲ', 'n').replace('ʎ', 'ɾ').replace('jɛ', 'je').replace('e̞', 'e').replace('ø̞', 'e').replace('ɭ', 'ɾ')
+        pronunciation.replace( '\u0361', '')
         for pronunciation in pronunciations
         ]
-
-    pronunciations = [
-        pronunciation.replace('wɛ', 'we') if any([hgtk.letter.decompose(letter)[1] in ['ㅚ', 'ㅞ'] for letter in text]) else pronunciation
-        for text, pronunciation in zip(texts, pronunciations)
-        ]
-
+    
     return pronunciations
 
 korean_vowels = sorted(
     # list({'u', 'o', 'wɛ', 'jo', 'i', 'ɯ', 'ø', 'wʌ', 'jʌ', 'ja', 'je', 'wi', 'ju', 'wa', 'ʌ', 'ɰi', 'e', 'a', 'we'}),
-    list({'u', 'o', 'wɛ', 'jo', 'i', 'ɯ', 'ø', 'wʌ', 'jʌ', 'ja', 'je', 'wi', 'ju', 'wa', 'ʌ', 'ɰi', 'e', 'a', 'we'}),
+    list({'e̞', 'i', 'o̞', 'ju', 'a̠', 'ɯ', 'ʌ̹', 'wa̠', 'u', 'jo', 'ɰ', 'jʌ̹', 'je̞', 'ja̠', 'ɰi', 'ɥi', 'wʌ̹', 'we̞'}),
     key= lambda x: len(x),
     reverse= True
     )
+
 korean_boundary_dict = {
-    'ts͈': ('', 'ts͈'), 'tʰ': ('', 'tʰ'), 't͈': ('', 't͈'), 's͈': ('', 's͈'), 'ɸʷ': ('', 'ɸʷ'), 
-    't': ('', 't'), 'sʰ': ('', 'sʰ'), 'ɸ': ('', 'ɸ'), 'm': ('', 'm'), 'sʰ': ('', 'sʰ'), 'kʰ': ('', 'kʰ'), 
-    'ʃʰ': ('', 'ʃʰ'), 'p͈': ('', 'p͈'), 'ɾ': ('', 'ɾ'), 'ɲ': ('', 'ɲ'), 'tsʰ': ('', 'tsʰ'), 
-    'p': ('', 'p'), 'ts': ('', 'ts'), 'n': ('', 'n'), 'pʰ': ('', 'pʰ'), 'k͈': ('', 'k͈'), 
-    'h': ('', 'h'), 'k': ('', 'k'), 'ɡ': ('', 'ɡ'), 'd': ('', 'd'), 'dʑ': ('', 'dʑ'),
-    'ʎ': ('', 'ʎ'), 'b': ('', 'b'), 'ɣ': ('', 'ɣ'), 'β': ('', 'β'), 'ʝ': ('', 'ʝ'),
-    'k̚': ('k', ''), 'ŋ': ('ŋ', ''), 'p̚': ('p', ''), 't̚': ('t', ''),
+    'b': ('', 'b'), 'ɕ͈': ('', 'ɕ͈'), 'd': ('', 'd'), 'pʰ': ('', 'pʰ'),
+    'tɕʰ': ('', 'tɕʰ'), 'kʰ': ('', 'kʰ'), 'ɾ': ('', 'ɾ'), 'm': ('', 'm'), 'n': ('', 'n'), 
+    'ç': ('', 'ç'), 'sʰ': ('', 'sʰ'), 'tʰ': ('', 'tʰ'), 'p͈': ('', 'p͈'), 'k': ('', 'k'), 
+    's͈': ('', 's͈'), 'dʑ': ('', 'dʑ'), 'p': ('', 'p'), 'ɦ': ('', 'ɦ'), 'k͈': ('', 'k͈'), 
+    'ɭ': ('ɭ', ''), 'ɡ': ('', 'ɡ'), 't': ('', 't'), 'h': ('', 'h'), 'ʎ': ('', 'ʎ'), 
+    'tɕʰ': ('', 'tɕʰ'), 'ŋ': ('ŋ', ''), 'ɕʰ': ('', 'ɕʰ'), 'k̚': ('k', ''), 'tɕ͈': ('', 'tɕ͈'),
+    't͈': ('', 't͈'), 'tɕ': ('', 'tɕ'), 'p̚': ('p', ''), 'ʝ': ('', 'ʝ'), 'ɲ': ('', 'ɲ'), 
+    't̚': ('t', ''), 'ɸʷ': ('', 'ɸʷ'), 'β': ('', 'β'), 'kx': ('', 'kx'), 'ɣ': ('', 'ɣ'), 
+    'x': ('', 'x'), 'ʃʰ': ('', 'ʃʰ'),  'ɸ': ('', 'ɸ'), 'kç': ('', 'kç'), 
     }
+
+convert_phoneme_dict = {
+    'a̠': 'a',
+    'dʑ': 'tɕ',
+    'e̞': 'e',
+    'ja̠': 'ja',
+    'je̞': 'je',
+    'jo': 'jo',
+    'ju': 'ju',
+    'jʌ̹': 'jɔ', # 'jʌ' -> 'jɔ',
+    'kx': 'kʰ',
+    'kç': 'kʰ',
+    'o̞': 'o',
+    'sʰ': 's',
+    'wa̠': 'wa',
+    'we̞': 'we',
+    'wʌ̹': 'wʌ',
+    'x': 'h',
+    'ç': 'h',
+    'ɕʰ': 's',
+    'ɕ͈': 's͈',
+    'ɣ': 'ɡ',
+    'ɥi': 'wi',
+    'ɦ': 'h',
+    'ɭ': 'ɾ',
+    'ɲ': 'n',
+    'ɸ': 'h',
+    'ɸʷ': 'h',
+    'ʃʰ': 's',
+    'ʌ̹': 'ʌ',
+    'ʝ': 'tɕ',
+    'β': 'b',
+    'ʎ': 'ɾ'
+}
+
 
 def _Korean_Split_Vowel(pronunciation: str):
     if len(pronunciation) == 0:
@@ -138,6 +164,18 @@ def Korean_G2P_Lyric(music):
     if len(lyrics) != len(music):
         return None
     for index, lyric in enumerate(lyrics):
+        if lyric != '<X>':
+            lyric = (
+                [convert_phoneme_dict.get(x, x) for x in lyric[0]],
+                convert_phoneme_dict.get(lyric[1], lyric[1]),
+                [convert_phoneme_dict.get(x, x) for x in lyric[2]],
+                )
+            if hgtk.letter.decompose(music[index][1])[1] == 'ㅙ':   # ko_pron does not consider 'wɛ'
+                lyric = (lyric[0], 'wɛ', lyric[2])
+            elif hgtk.letter.decompose(music[index][1])[1] == 'ㅐ':   # ko_pron does not consider 'ɛ'
+                lyric = (lyric[0], 'ɛ', lyric[2])
+            elif hgtk.letter.decompose(music[index][1])[1] == 'ㅒ':
+                lyric = (lyric[0], 'jɛ', lyric[2])
         music[index] = (
             music[index][0],
             ['<X>'] if lyric == '<X>' else lyric,
@@ -197,5 +235,9 @@ def Process(
         hop_size= hop_size
         )
     music = Convert_Lyric_Syllable_to_Sequence(music)
+
+    for index, note in enumerate(music):
+        if '<X>' == note.Text:
+            continue
     
     return music
