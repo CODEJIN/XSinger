@@ -235,9 +235,5 @@ def Process(
         hop_size= hop_size
         )
     music = Convert_Lyric_Syllable_to_Sequence(music)
-
-    for index, note in enumerate(music):
-        if '<X>' == note.Text:
-            continue
     
     return music

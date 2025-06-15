@@ -1689,3 +1689,13 @@ if __name__ == '__main__':
 #     -kiritan /nas/SW/heejo.you/rawdata_music/Kiritan \
 #     -ofuton /nas/SW/heejo.you/rawdata_music/OFUTON_P_UTAGOE_DB \
 #     -gtsinger /nas/SW/heejo.you/rawdata_music/GTSinger
+
+# python -m Pattern.Generator -hp Hyper_Parameters.yaml \
+#     -csd /mnt/f/Rawdata_Music/CSD_1.1 \
+#     -amz /mnt/f/Rawdata_Music/AIHub_Mediazen \
+#     -amb /mnt/e/AIHub_Metabuild \
+#     -m4 /mnt/f/Rawdata_Music/m4singer \
+#     -opencpop /mnt/e/OpenCPop \
+#     -kiritan /mnt/f/Rawdata_Music/Kiritan \
+#     -ofuton /mnt/f/Rawdata_Music/OFUTON_P_UTAGOE_DB \
+#     -gtsinger /mnt/e/GTSinger
