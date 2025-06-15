@@ -75,7 +75,7 @@ class Inferencer:
             singer_dict = singer_dict,
             language_dict= language_dict,
             lyrics= lyrics,
-            notes= notes,
+            pitchs= notes,
             durations= durations,
             singers= singers,
             languages= languages,

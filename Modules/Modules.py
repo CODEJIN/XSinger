@@ -30,7 +30,7 @@ class TechSinger_Linear(torch.nn.Module):
             )
         
         self.tech_predictor = Tech_Predictor(self.hp)
-        self.tech_weight = torch.empty(self.hp.Techniques, self.hp.Encoder.Size)
+        self.tech_weight = torch.nn.Parameter(torch.empty(self.hp.Techniques, self.hp.Encoder.Size))
         weight_variance = math.sqrt(3.0) * math.sqrt(2.0 / (self.hp.Techniques + self.hp.Encoder.Size))
         self.tech_weight.data.uniform_(-weight_variance, weight_variance)
         
@@ -75,7 +75,7 @@ class TechSinger_Linear(torch.nn.Module):
             )   # [Batch, Dec_t]
         f0_encodings = self.f0_embedding(f0s_coarse).mT # [Batch, Enc_d, Dec_t]
 
-        prediction_techs = self.tech_predictor(encodings)
+        prediction_techs = self.tech_predictor(encodings, mel_lengths)
         techs = torch.einsum('bnt,ne->bet', techs.float(), self.tech_weight)
         
         prediction_mels = self.prior_encoder(
@@ -129,9 +129,9 @@ class TechSinger_Linear(torch.nn.Module):
             )   # [Batch, Dec_t]
         f0_encodings = self.f0_embedding(f0s_coarse).mT
 
-        techs = self.tech_predictor(encodings)
-        techs = (techs > 0.0).int()
-        techs = torch.einsum('bnt,ne->bet', techs.float(), self.tech_weight)
+        techs = self.tech_predictor(encodings, mel_lengths)
+        techs = (techs > 0.0).float()
+        techs = torch.einsum('bnt,ne->bet', techs, self.tech_weight)
         
         prediction_mels = self.prior_encoder(
             encodings= encodings + f0_encodings + techs,
@@ -464,7 +464,7 @@ class Phoneme_to_Note_Cross_Encoder(torch.nn.Module):
 
         return encodings, cross_alignments
 
-class Tech_Encoder(torch.nn.Module):
+class Tech_Predictor(torch.nn.Module):
     def __init__(
         self,
         hyper_parameters: Namespace

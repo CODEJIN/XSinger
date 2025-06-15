@@ -108,16 +108,15 @@ class Trainer:
                 wandb.watch(self.model_dict['TechSinger_Linear'])
 
     def Dataset_Generate(self):
-        token_dict = yaml.load(open(self.hp.Token_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
-        singer_dict = yaml.load(open(self.hp.Singer_Info_Path, 'r', encoding= 'utf-8-sig'), Loader=yaml.Loader)
-        language_dict = yaml.load(open(self.hp.Language_Info_Path, 'r', encoding= 'utf-8-sig'), Loader=yaml.Loader)
+        token_dict = yaml.load(open(os.path.join(self.hp.Dataset_Path, self.hp.Token_Path), encoding= 'utf-8-sig'), Loader=yaml.Loader)
+        singer_dict = yaml.load(open(os.path.join(self.hp.Dataset_Path, self.hp.Singer_Info_Path), 'r', encoding= 'utf-8-sig'), Loader=yaml.Loader)
+        language_dict = yaml.load(open(os.path.join(self.hp.Dataset_Path, self.hp.Language_Info_Path), 'r', encoding= 'utf-8-sig'), Loader=yaml.Loader)
         
         train_dataset = Dataset(
             token_dict= token_dict,
             singer_dict = singer_dict,
             language_dict= language_dict,
-            pattern_path= self.hp.Train.Train_Pattern.Path,
-            metadata_file= self.hp.Train.Train_Pattern.Metadata_File,
+            metadata_path= os.path.join(self.hp.Dataset_Path, 'Train', 'METADATA.PICKLE'),
             pattern_length_min= self.hp.Train.Pattern_Length.Min,
             pattern_length_max= self.hp.Train.Pattern_Length.Max,
             accumulated_dataset_epoch= self.hp.Train.Train_Pattern.Accumulated_Dataset_Epoch,
@@ -128,8 +127,7 @@ class Trainer:
             token_dict= token_dict,
             singer_dict = singer_dict,
             language_dict= language_dict,
-            pattern_path= self.hp.Train.Eval_Pattern.Path,
-            metadata_file= self.hp.Train.Eval_Pattern.Metadata_File,
+            metadata_path= os.path.join(self.hp.Dataset_Path, 'Eval', 'METADATA.PICKLE'),
             pattern_length_min= self.hp.Train.Pattern_Length.Min,
             pattern_length_max= self.hp.Train.Pattern_Length.Max,
             use_pattern_cache= self.hp.Train.Pattern_Cache,
@@ -140,7 +138,7 @@ class Trainer:
             singer_dict = singer_dict,
             language_dict= language_dict,
             lyrics= self.hp.Train.Inference_in_Train.Lyric,
-            notes= self.hp.Train.Inference_in_Train.Note,
+            pitchs= self.hp.Train.Inference_in_Train.Note,
             durations= self.hp.Train.Inference_in_Train.Duration,
             singers= self.hp.Train.Inference_in_Train.Singer,
             languages= self.hp.Train.Inference_in_Train.Language,
@@ -187,8 +185,8 @@ class Trainer:
             )
 
     def Model_Generate(self):
-        mel_dict = yaml.load(open(self.hp.Mel_Info_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)
-        f0_dict = yaml.load(open(self.hp.F0_Info_Path, encoding= 'utf-8-sig'), Loader=yaml.Loader)        
+        mel_dict = yaml.load(open(os.path.join(self.hp.Dataset_Path, self.hp.Mel_Info_Path), encoding= 'utf-8-sig'), Loader=yaml.Loader)
+        f0_dict = yaml.load(open(os.path.join(self.hp.Dataset_Path, self.hp.F0_Info_Path), encoding= 'utf-8-sig'), Loader=yaml.Loader)        
         mel_mean, mel_std = mel_dict['Total']['Mean'], mel_dict['Total']['Std']
         f0_mean, f0_std = f0_dict['Total']['Mean'], f0_dict['Total']['Std']
 
@@ -214,6 +212,7 @@ class Trainer:
                 blank= self.hp.Tokens,  # == Token length
                 zero_infinity= True
                 ),
+            'BCE': torch.nn.BCEWithLogitsLoss(reduction= 'none').to(self.device)
             }
 
         self.optimizer_dict = {
@@ -233,7 +232,7 @@ class Trainer:
                 )
             }
         
-        self.vocoder = torch.jit.load('BigVGAN_24K_100band_256x.pts', map_location= 'cpu').to(self.device)
+        self.vocoder = torch.jit.load('BigVGAN_44K_128band_256x.pts', map_location= 'cpu').to(self.device)
         
         # if self.accelerator.is_main_process:
         #     logging.info(self.model_dict['TechSinger_Linear'])
@@ -248,6 +247,7 @@ class Trainer:
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         languages: torch.IntTensor,
+        techs: torch.IntTensor,
         mels: torch.FloatTensor,
         f0s: torch.FloatTensor,
         mel_lengths: torch.IntTensor,
@@ -256,7 +256,7 @@ class Trainer:
         with self.accelerator.accumulate(self.model_dict['TechSinger_Linear']):
             target_mels, prediction_mels, \
             f0_flows, prediction_f0_flows, \
-            cross_attention_alignments = self.model_dict['TechSinger_Linear'](
+            prediction_techs, cross_attention_alignments = self.model_dict['TechSinger_Linear'](
                 tokens= tokens,
                 languages= languages,
                 token_lengths= token_lengths,
@@ -265,6 +265,7 @@ class Trainer:
                 durations= durations,
                 note_lengths= note_lengths,
                 singers= singers,
+                techs= techs,
                 mels= mels,
                 f0s= f0s,
                 mel_lengths= mel_lengths
@@ -290,12 +291,17 @@ class Trainer:
                 # query_lengths= mel_lengths,
                 # key_lengths= token_lengths
                 )
+            loss_dict['Tech'] = (self.criterion_dict['BCE'](
+                prediction_techs,
+                techs.to(dtype= prediction_techs.dtype),
+                ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_techs.size(1)
             
             self.optimizer_dict['TechSinger_Linear'].zero_grad()
             self.accelerator.backward(
                 loss_dict['RectifiedFlow_F0'] +
                 loss_dict['Encoding'] +
-                loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention
+                loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention +
+                loss_dict['Tech']
                 )
 
             if self.hp.Train.Gradient_Norm > 0.0:
@@ -321,7 +327,7 @@ class Trainer:
         for tokens, token_lengths, token_on_note_lengths, \
             notes, durations, note_lengths, \
             singers, languages, \
-            mels, f0s, mel_lengths in self.dataloader_dict['Train']:
+            techs, mels, f0s, mel_lengths in self.dataloader_dict['Train']:
             self.Train_Step(
                 tokens= tokens,
                 token_lengths= token_lengths,
@@ -331,6 +337,7 @@ class Trainer:
                 note_lengths= note_lengths,
                 singers= singers,
                 languages= languages,
+                techs= techs,
                 mels= mels,
                 f0s= f0s,
                 mel_lengths= mel_lengths,
@@ -384,14 +391,15 @@ class Trainer:
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         languages: torch.IntTensor,
+        techs: torch.IntTensor,
         mels: torch.IntTensor,
         f0s: torch.IntTensor,
         mel_lengths: torch.IntTensor,
         ):
         loss_dict = {}
         target_mels, prediction_mels, \
-            f0_flows, prediction_f0_flows, \
-            cross_attention_alignments = self.model_dict['TechSinger_Linear'](
+        f0_flows, prediction_f0_flows, \
+        prediction_techs, cross_attention_alignments = self.model_dict['TechSinger_Linear'](
             tokens= tokens,
             languages= languages,
             token_lengths= token_lengths,
@@ -400,6 +408,7 @@ class Trainer:
             durations= durations,
             note_lengths= note_lengths,
             singers= singers,
+            techs= techs,
             mels= mels,
             f0s= f0s,
             mel_lengths= mel_lengths
@@ -425,6 +434,10 @@ class Trainer:
             # query_lengths= mel_lengths,
             # key_lengths= token_lengths
             )
+        loss_dict['Tech'] = (self.criterion_dict['BCE'](
+            prediction_techs,
+            techs.to(dtype= prediction_techs.dtype),
+            ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_techs.size(1)
         
         for tag, loss in loss_dict.items():
             self.scalar_dict['Evaluation']['Loss/{}'.format(tag)] += loss.item()
@@ -446,7 +459,7 @@ class Trainer:
         for step, (
             tokens, token_lengths, token_on_note_lengths,
             notes, durations, note_lengths, singers, languages,
-            mels, f0s, mel_lengths
+            techs, mels, f0s, mel_lengths
             ) in dataloader:
             self.Evaluation_Step(
                 tokens= tokens,
@@ -457,6 +470,7 @@ class Trainer:
                 note_lengths= note_lengths,
                 singers= singers,
                 languages= languages,
+                techs= techs,
                 mels= mels,
                 f0s= f0s,
                 mel_lengths= mel_lengths,
