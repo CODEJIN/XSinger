@@ -37,6 +37,9 @@ Encoder:
             Kernel_Size: 7
             Dropout_Rate: 0.1
     Phoneme_to_Note_Cross_Encoder:
+        Cross_Attention:
+            Location_Size: 32
+            Location_Kernel_Size: 31
         Stack: 2
         Head: 2
         Dropout_Rate: 0.1

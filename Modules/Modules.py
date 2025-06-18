@@ -4,6 +4,7 @@ import math
 from typing import Union, List, Optional, Tuple
 
 from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Norm_Type, Lambda
+from .LSSMA import Location_Sensitive_Stepwise_Monotonic_Attention
 from .RectifiedFlow_F0 import RectifiedFlow as F0_Predictor
 
 class TechSinger_Linear(torch.nn.Module):
@@ -411,14 +412,19 @@ class Phoneme_to_Note_Cross_Encoder(torch.nn.Module):
         super().__init__()
         self.hp = hyper_parameters
         
+        self.cross_attention = Location_Sensitive_Stepwise_Monotonic_Attention(
+            embed_dim= self.hp.Encoder.Size,
+            attention_location_channels= self.hp.Encoder.Phoneme_to_Note_Cross_Encoder.Cross_Attention.Location_Size,
+            attention_location_kernel_size= self.hp.Encoder.Phoneme_to_Note_Cross_Encoder.Cross_Attention.Location_Kernel_Size,
+            )
+
         self.blocks = torch.nn.ModuleList([
             FFT_Block(
                 channels= self.hp.Encoder.Size,
                 num_head= self.hp.Encoder.Phoneme_to_Note_Cross_Encoder.Head,
                 ffn_kernel_size= self.hp.Encoder.Phoneme_to_Note_Cross_Encoder.FFN.Kernel_Size,
                 ffn_dropout_rate= self.hp.Encoder.Phoneme_to_Note_Cross_Encoder.FFN.Dropout_Rate,
-                norm_type= Norm_Type.LayerNorm,
-                cross_attention_condition_channels= self.hp.Encoder.Size
+                norm_type= Norm_Type.LayerNorm
                 )
             for _ in range(self.hp.Encoder.Phoneme_to_Note_Cross_Encoder.Stack)
             ])  # real type: torch.nn.ModuleList[FFT_BLock]
@@ -442,27 +448,26 @@ class Phoneme_to_Note_Cross_Encoder(torch.nn.Module):
             masks = Mask_Generate(lengths= melody_lengths, max_length= torch.ones_like(melody_encodings[0, 0]).sum())    # [Batch, Time]
             float_masks = (~masks)[:, None].float()   # float mask, [Batch, 1, X_t]
 
-        encodings = melody_encodings
+        cross_contexts, cross_alignments = self.cross_attention(
+            queries= melody_encodings,
+            values= lyric_encodings,
+            key_padding_mask= Mask_Generate(
+                lengths= lyric_lengths,
+                max_length= lyric_encodings.size(2)
+                )
+            )   # [Batch, Enc_d, Dec_t], [Batch, Token_t, Dec_t]
+        encodings = melody_encodings + cross_contexts
         
-        cross_alignments = []
         for block in self.blocks:
-            cross_alignments.append(block.Get_Cross_Alignments(
-                x= encodings,
-                cross_attention_conditions= lyric_encodings,
-                cross_attention_condition_lengths= lyric_lengths,
-                average_attn_weights= False
-                ))
             encodings = block(
                 x= encodings,
-                lengths= melody_lengths,
-                cross_attention_conditions= lyric_encodings,
-                cross_attention_condition_lengths= lyric_lengths
+                lengths= melody_lengths
                 )
         
         encodings = encodings * float_masks
-        cross_alignments = torch.cat(cross_alignments, dim= 1).mean(dim= 1) # [Batch, Melody_d, Lyric_d]
+        
 
-        return encodings, cross_alignments
+        return encodings, cross_alignments.mT
 
 class Tech_Predictor(torch.nn.Module):
     def __init__(
