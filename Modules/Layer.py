@@ -360,7 +360,8 @@ class FFT_Block(torch.nn.Module):
         lengths: Optional[torch.IntTensor]= None,
         cross_attention_conditions: Optional[torch.FloatTensor]= None,
         cross_attention_condition_lengths: Optional[torch.IntTensor]= None,
-        layer_norm_conditions: Optional[torch.FloatTensor]= None
+        layer_norm_conditions: Optional[torch.FloatTensor]= None,
+        cross_attention_masks: Optional[torch.FloatTensor]= None,   # masking is 1.0, don't use boolean.
         ) -> torch.FloatTensor:
         '''
         x: [B, X_d, X_t]
@@ -368,6 +369,7 @@ class FFT_Block(torch.nn.Module):
         cross_attention_conditions: [B, CAC_d, CAC_t]
         cross_attention_condition_lengths: [B]
         layer_norm_conditions: [B, LNC_d, X_t or 1], X_t-> local condition, 1 -> global condition
+        cross_attention_masks: [B, X_t, CAC_t]
         '''
         if not layer_norm_conditions is None:
             layer_norm_conditions = layer_norm_conditions.mT    # [B, X_t or 1, LNC_d]
@@ -401,7 +403,8 @@ class FFT_Block(torch.nn.Module):
                 query= x_cross_attentions,
                 key= cross_attention_conditions,
                 value= cross_attention_conditions,
-                key_padding_mask= cross_attention_condition_masks
+                key_padding_mask= cross_attention_condition_masks,
+                attn_mask= cross_attention_masks
                 )   # [X_t, Batch, X_d]
             x_cross_attentions = x_cross_attentions.permute(1, 0, 2)  # [Batch, X_t, X_d]
 
@@ -444,7 +447,8 @@ class FFT_Block(torch.nn.Module):
         x: torch.FloatTensor,
         cross_attention_conditions: torch.FloatTensor,
         cross_attention_condition_lengths: Optional[torch.IntTensor]= None,
-        average_attn_weights: bool= True
+        cross_attention_masks: Optional[torch.FloatTensor]= None,   # masking is 1.0, don't use boolean.
+        average_attn_weights: bool= True,
         ) -> torch.FloatTensor:
         '''
         x: [B, X_d, X_t]
@@ -466,6 +470,7 @@ class FFT_Block(torch.nn.Module):
             key= cross_attention_conditions,
             value= cross_attention_conditions,
             key_padding_mask= cross_attention_condition_masks,
+            attn_mask= cross_attention_masks,
             need_weights= True,
             average_attn_weights= average_attn_weights
             )   # [Batch, X_t, CAC_t] or [Batch, Head, X_t, CAC_t]

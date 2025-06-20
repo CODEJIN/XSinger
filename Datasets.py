@@ -113,24 +113,17 @@ class Dataset(torch.utils.data.Dataset):
         self.token_dict = token_dict
         self.singer_dict = singer_dict
         self.language_dict = language_dict
-        self.pattern_length_min = pattern_length_min
-        self.pattern_length_max = pattern_length_max
         self.dataset_path = os.path.dirname(metadata_path)
 
         metadata_dict = pickle.load(open(metadata_path, 'rb'))
 
-        self.patterns = []
-        max_pattern_by_singer = max([
-            len(patterns)
-            for patterns in metadata_dict['File_List_by_Singer_Dict'].values()
-            ])
-        for patterns in metadata_dict['File_List_by_Singer_Dict'].values():
-            ratio = float(len(patterns)) / float(max_pattern_by_singer)
-            if ratio < augmentation_ratio:
-                patterns *= int(np.ceil(augmentation_ratio / ratio))
-            self.patterns.extend(patterns)
-
-        self.patterns = self.patterns * accumulated_dataset_epoch
+        self.patterns = [
+            x for x in metadata_dict['File_List']
+            if all([
+                metadata_dict['Mel_Length_Dict'][x] >= pattern_length_min,
+                metadata_dict['Mel_Length_Dict'][x] <= pattern_length_max
+                ])
+            ] * accumulated_dataset_epoch
 
         if use_pattern_cache:
             self.Pattern_LRU_Cache = functools.lru_cache(maxsize= None)(self.Pattern_LRU_Cache)

@@ -284,13 +284,13 @@ class Trainer:
                 prediction_f0_flows,
                 f0_flows,
                 ) * mel_float_masks).sum() / mel_float_masks.sum() / prediction_f0_flows.size(1)            
-            loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
-                alignments= cross_attention_alignments,
-                token_on_note_lengths= token_on_note_lengths,
-                note_durations = durations
-                # query_lengths= mel_lengths,
-                # key_lengths= token_lengths
-                )
+            # loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
+            #     alignments= cross_attention_alignments,
+            #     token_on_note_lengths= token_on_note_lengths,
+            #     note_durations = durations
+            #     # query_lengths= mel_lengths,
+            #     # key_lengths= token_lengths
+            #     )
             loss_dict['Tech'] = (self.criterion_dict['BCE'](
                 prediction_techs,
                 techs.to(dtype= prediction_techs.dtype),
@@ -300,7 +300,7 @@ class Trainer:
             self.accelerator.backward(
                 loss_dict['RectifiedFlow_F0'] +
                 loss_dict['Encoding'] +
-                loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention +
+                # loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention +
                 loss_dict['Tech']
                 )
 
@@ -427,13 +427,13 @@ class Trainer:
                 prediction_f0_flows,
                 f0_flows,
                 ) * mel_float_masks).sum() / mel_float_masks.sum() / prediction_f0_flows.size(1)            
-        loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
-            alignments= cross_attention_alignments,
-            token_on_note_lengths= token_on_note_lengths,
-            note_durations = durations
-            # query_lengths= mel_lengths,
-            # key_lengths= token_lengths
-            )
+        # loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
+        #     alignments= cross_attention_alignments,
+        #     token_on_note_lengths= token_on_note_lengths,
+        #     note_durations = durations
+        #     # query_lengths= mel_lengths,
+        #     # key_lengths= token_lengths
+        #     )
         loss_dict['Tech'] = (self.criterion_dict['BCE'](
             prediction_techs,
             techs.to(dtype= prediction_techs.dtype),

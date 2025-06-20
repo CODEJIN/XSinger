@@ -212,7 +212,7 @@ class Encoder(torch.nn.Module):
         # average pooling
         token_to_note_alignments = \
             Length_Regulate(token_on_note_lengths, lyric_encodings.size(2)) / token_on_note_lengths[:, None, :].clamp(1.0)  # [Batch, Token_t, Note_t]
-        
+
         pooled_lyric_encodings: torch.FloatTensor = lyric_encodings @ token_to_note_alignments  # [Batch, Enc_d, Note_t]
         pooled_lyric_encodings: torch.FloatTensor = self.phoneme_to_note_encoder(
             encodings= pooled_lyric_encodings,
@@ -223,12 +223,15 @@ class Encoder(torch.nn.Module):
 
         note_to_decoding_alignments = Length_Regulate(durations).mT # [Batch, Note_t, Dec_t]
         melody_encodings = (melody_encodings + pooled_lyric_encodings) @ note_to_decoding_alignments # [Batch, Enc_d, Dec_t]
-        
+
+        cross_attention_masks = (token_to_note_alignments > 0.0).to(note_to_decoding_alignments.dtype) @ note_to_decoding_alignments
+        cross_attention_masks = (cross_attention_masks == 0.0).to(note_to_decoding_alignments.dtype).mT # [Batch, Dec_t, Token_t]
         encodings, cross_attention_alignments = self.phoneme_to_note_cross_encoder(
             melody_encodings= melody_encodings,
             melody_lengths= mel_lengths,
             lyric_encodings= lyric_encodings,
-            lyric_lengths= token_lengths
+            lyric_lengths= token_lengths,
+            cross_attention_masks= cross_attention_masks
             )
 
         singers = singers @ token_to_note_alignments @ note_to_decoding_alignments  # [Batch, Enc_d, Dec_t]
@@ -428,7 +431,8 @@ class Phoneme_to_Note_Cross_Encoder(torch.nn.Module):
         melody_encodings: torch.FloatTensor,
         melody_lengths: torch.IntTensor,
         lyric_encodings: torch.FloatTensor,
-        lyric_lengths: torch.IntTensor
+        lyric_lengths: torch.IntTensor,
+        cross_attention_masks: Optional[torch.FloatTensor]= None,
         ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
         '''
         melody_encodings: [Batch, Enc_d, Dec_t]
@@ -450,13 +454,15 @@ class Phoneme_to_Note_Cross_Encoder(torch.nn.Module):
                 x= encodings,
                 cross_attention_conditions= lyric_encodings,
                 cross_attention_condition_lengths= lyric_lengths,
+                cross_attention_masks= cross_attention_masks,
                 average_attn_weights= False
                 ))
             encodings = block(
                 x= encodings,
                 lengths= melody_lengths,
                 cross_attention_conditions= lyric_encodings,
-                cross_attention_condition_lengths= lyric_lengths
+                cross_attention_condition_lengths= lyric_lengths,
+                cross_attention_masks= cross_attention_masks,
                 )
         
         encodings = encodings * float_masks
