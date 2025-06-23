@@ -99,7 +99,8 @@ class TechSinger_Linear(torch.nn.Module):
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         mel_lengths: torch.IntTensor,
-        rectifiedflow_steps: int= 100
+        rectifiedflow_steps: int= 100,
+        use_f0_bound: bool= False
         ):
         encodings, singers, cross_attention_alignments, notes_expanded = self.encoder(
             tokens= tokens,
@@ -118,12 +119,12 @@ class TechSinger_Linear(torch.nn.Module):
             steps= rectifiedflow_steps
             )        
         f0s = (normalized_f0s * self.f0_std + self.f0_mean).clamp_min(0.0)
-        # need dynamic clipping
-        f0s_lower_bound = (440 * 2 ** ((notes_expanded - 3 - 69) / 12))
-        f0s_lower_bound = torch.where(notes_expanded > 0, f0s_lower_bound, torch.zeros_like(f0s_lower_bound))
-        f0s_upper_bound = 440 * 2 ** ((notes_expanded + 3 - 69) / 12)
-        f0s = torch.where(f0s < f0s_lower_bound, f0s_lower_bound, f0s)
-        f0s = torch.where(f0s > f0s_upper_bound, f0s_upper_bound, f0s)                
+        if use_f0_bound:    # need dynamic clipping
+            f0s_lower_bound = (440 * 2 ** ((notes_expanded - 3 - 69) / 12))
+            f0s_lower_bound = torch.where(notes_expanded > 0, f0s_lower_bound, torch.zeros_like(f0s_lower_bound))
+            f0s_upper_bound = 440 * 2 ** ((notes_expanded + 3 - 69) / 12)
+            f0s = torch.where(f0s < f0s_lower_bound, f0s_lower_bound, f0s)
+            f0s = torch.where(f0s > f0s_upper_bound, f0s_upper_bound, f0s)
         f0s_coarse = self.F0_Coarse(
             f0s= f0s
             )   # [Batch, Dec_t]
