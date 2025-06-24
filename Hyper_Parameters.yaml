@@ -66,7 +66,13 @@ Prior_Encoder:
     Stack: 8
     Kernel_Size: 5
     Projection_Kernel_Size: 3
-    
+
+Token_Predictor:
+    Size: 256
+    LSTM:
+        Stack: 2
+        Dropout_Rate: 0.0
+
 # CFM:
 #     Size: 512
 #     Scheduler: 'Uniform' # 'Cosmap'
@@ -97,8 +103,8 @@ Train:
     Num_Workers: 2
     Batch_Size: 8
     Pattern_Length:
-        Min: 384
-        Max: 768
+        Min: 256
+        Max: 1536
     Learning_Rate:
         Initial: 1.0e-4
         Decay: 0.999875

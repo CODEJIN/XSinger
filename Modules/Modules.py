@@ -36,6 +36,8 @@ class TechSinger_Linear(torch.nn.Module):
         
         self.prior_encoder = Prior_Encoder(self.hp)
 
+        self.token_predictor = Token_Predictor(self.hp)
+
     def forward(
         self,
         tokens: torch.IntTensor,
@@ -82,11 +84,15 @@ class TechSinger_Linear(torch.nn.Module):
             encodings= encodings + f0_encodings + techs,
             lengths= mel_lengths
             )
+        
+        prediction_tokens = self.token_predictor(
+            encodings= prediction_mels
+            )
 
         return \
             normalized_mels, prediction_mels, \
             f0_flows, prediction_f0_flows, \
-            prediction_techs, cross_attention_alignments
+            prediction_techs, prediction_tokens
     
     def Inference(
         self,
@@ -515,6 +521,46 @@ class Tech_Predictor(torch.nn.Module):
 
         return techs
 
+class Token_Predictor(torch.nn.Module):
+    def __init__(
+        self,
+        hyper_parameters: Namespace
+        ):
+        super().__init__()
+        self.hp = hyper_parameters
+        
+        self.lstm = torch.nn.LSTM(
+            input_size= self.hp.Sound.N_Mel,
+            hidden_size= self.hp.Token_Predictor.Size,
+            num_layers= self.hp.Token_Predictor.LSTM.Stack,
+            )
+        self.lstm_dropout = torch.nn.Dropout(
+            p= self.hp.Token_Predictor.LSTM.Dropout_Rate,
+            )
+
+        self.projection = Conv_Init(torch.nn.Conv1d(
+            in_channels= self.hp.Token_Predictor.Size,
+            out_channels= self.hp.Tokens + 1,
+            kernel_size= 1,
+            ), w_init_gain= 'linear')
+            
+    def forward(
+        self,
+        encodings: torch.Tensor,
+        ) -> torch.Tensor:
+        '''
+        features: [Batch, Feature_d, Feature_t], Spectrogram
+        lengths: [Batch]
+        '''
+        encodings = encodings.permute(2, 0, 1)    # [Feature_t, Batch, Enc_d]
+        
+        self.lstm.flatten_parameters()
+        encodings = self.lstm(encodings)[0] # [Feature_t, Batch, LSTM_d]
+        
+        predictions = self.projection(encodings.permute(1, 2, 0))
+        predictions = torch.nn.functional.log_softmax(predictions, dim= 1)
+
+        return predictions
 
 class Prior_Encoder(torch.nn.Module):
     def __init__(
