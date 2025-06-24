@@ -19,12 +19,12 @@ class RectifiedFlow(torch.nn.Module):
             hyper_parameters= self.hp
             )
 
-        if self.hp.CFM.Scheduler.upper() == 'Uniform'.upper():
+        if self.hp.RectifiedFlow.Scheduler.upper() == 'Uniform'.upper():
             self.timestep_scheduler = lambda x: x
-        elif self.hp.CFM.Scheduler.upper() == 'Cosmap'.upper():
+        elif self.hp.RectifiedFlow.Scheduler.upper() == 'Cosmap'.upper():
             self.timestep_scheduler = lambda x: 1.0 - (1 / (torch.tan(torch.pi / 2.0 * x) + 1))
         else:
-            raise NotImplementedError(f'Unsupported CFM scheduler: {self.hp.CFM.Scheduler}')
+            raise NotImplementedError(f'Unsupported CFM scheduler: {self.hp.RectifiedFlow.Scheduler}')
 
     def forward(
         self,
@@ -36,7 +36,7 @@ class RectifiedFlow(torch.nn.Module):
         encodings: [Batch, Enc_d, Dec_t]
         mels: [Batch, Mel_d, Mel_t]
         '''        
-        if self.hp.CFM.Use_CFG:
+        if self.hp.RectifiedFlow.Use_CFG:
             cfg_filters = (torch.rand(
                 encodings.size(0),
                 device= encodings.device
@@ -47,7 +47,7 @@ class RectifiedFlow(torch.nn.Module):
             torch.rand(encodings.size(0), device= encodings.device)
             )[:, None, None]
 
-        if self.hp.CFM.Use_OT:
+        if self.hp.RectifiedFlow.Use_OT:
             noises = self.OT_CFM_Sampling(mels)
         else:
             noises = torch.randn_like(mels)  # [Batch, Mel_d, Mel_t]
@@ -93,14 +93,15 @@ class RectifiedFlow(torch.nn.Module):
         delta_timesteps_list = delta_timesteps_list[:, None].expand(-1, x.size(0))   # [Batch, Step]
 
         # Prepare inputs for potential CFG (duplicate batch for unconditional call)
-        if self.hp.CFM.Use_CFG:
+        if self.hp.RectifiedFlow.Use_CFG:
             batch_size = x.size(0)
             x_double = torch.cat([x, x], dim=0)
             encodings_double = torch.cat([encodings, torch.zeros_like(encodings)], dim=0)
             lengths_double = torch.cat([lengths, lengths], dim=0) # lengths are the same for both
 
         for timesteps, delta_timesteps in zip(timesteps_list, delta_timesteps_list):
-            if self.hp.CFM.Use_CFG:
+            if self.hp.RectifiedFlow.Use_CFG:
+                delta_timesteps_double = torch.cat([delta_timesteps, delta_timesteps], dim= 0)
                 timesteps_double = torch.cat([timesteps, timesteps], dim=0) # timesteps are the same for both
                 network_outputs_double = self.network.forward(
                     noised_mels= x_double,
@@ -113,7 +114,7 @@ class RectifiedFlow(torch.nn.Module):
                 network_outputs = network_outputs + cfg_guidance_scale * (network_outputs - network_outputs_without_condition)
 
                 # Update x_double for the next step
-                x_double = x_double + delta_timesteps[:, None, None] * network_outputs_double # Euler update
+                x_double = x_double + delta_timesteps_double[:, None, None] * network_outputs_double # Euler update
                 x = x_double[:batch_size] # Update x for the next iteration (only the conditional part)
             else:
                 network_outputs = self.network.forward(
@@ -185,7 +186,7 @@ class Network(torch.nn.Module):
         self.prenet = torch.nn.Sequential(
             Conv_Init(torch.nn.Conv1d(
                 in_channels= self.hp.Sound.N_Mel,
-                out_channels= self.hp.CFM.Size,
+                out_channels= self.hp.RectifiedFlow.Size,
                 kernel_size= 1,
                 ), w_init_gain= 'gelu'),
             torch.nn.GELU(approximate= 'tanh')
@@ -193,29 +194,29 @@ class Network(torch.nn.Module):
         self.encoding_ffn = torch.nn.Sequential(
             Conv_Init(torch.nn.Conv1d(
                 in_channels= self.hp.Sound.N_Mel,
-                out_channels= self.hp.CFM.Size * 4,
+                out_channels= self.hp.RectifiedFlow.Size * 4,
                 kernel_size= 1,
                 ), w_init_gain= 'gelu'),
             torch.nn.GELU(approximate= 'tanh'),
             Conv_Init(torch.nn.Conv1d(
-                in_channels= self.hp.CFM.Size * 4,
-                out_channels= self.hp.CFM.Size,
+                in_channels= self.hp.RectifiedFlow.Size * 4,
+                out_channels= self.hp.RectifiedFlow.Size,
                 kernel_size= 1,
                 ), w_init_gain= 'linear')
             )
 
         self.step_ffn = torch.nn.Sequential(
             Step_Embedding(
-                embedding_dim= self.hp.CFM.Size
+                embedding_dim= self.hp.RectifiedFlow.Size
                 ),            
             Conv_Init(torch.nn.Linear(
-                in_features= self.hp.CFM.Size,
-                out_features= self.hp.CFM.Size * 4,
+                in_features= self.hp.RectifiedFlow.Size,
+                out_features= self.hp.RectifiedFlow.Size * 4,
                 ), w_init_gain= 'gelu'),
             torch.nn.GELU(approximate= 'tanh'),
             Conv_Init(torch.nn.Linear(
-                in_features= self.hp.CFM.Size * 4,
-                out_features= self.hp.CFM.Size,
+                in_features= self.hp.RectifiedFlow.Size * 4,
+                out_features= self.hp.RectifiedFlow.Size,
                 ), w_init_gain= 'linear')
             )
 
@@ -223,29 +224,29 @@ class Network(torch.nn.Module):
         self.mid_blocks = torch.nn.ModuleList()
         self.up_blocks = torch.nn.ModuleList()
 
-        for unet_index in range(self.hp.CFM.UNet.Rescale_Stack):
+        for unet_index in range(self.hp.RectifiedFlow.UNet.Rescale_Stack):
             resnet_block = ResnetBlock(
-                in_channels= self.hp.CFM.Size * (2 if unet_index == 0 else 1),
-                out_channels= self.hp.CFM.Size,
-                kernel_size= self.hp.CFM.UNet.Kernel_Size,
-                groups= self.hp.CFM.UNet.Groups,
-                step_channels= self.hp.CFM.Size
+                in_channels= self.hp.RectifiedFlow.Size * (2 if unet_index == 0 else 1),
+                out_channels= self.hp.RectifiedFlow.Size,
+                kernel_size= self.hp.RectifiedFlow.UNet.Kernel_Size,
+                groups= self.hp.RectifiedFlow.UNet.Groups,
+                step_channels= self.hp.RectifiedFlow.Size
                 )
             transformer_blocks = torch.nn.ModuleList([
                 FFT_Block(
-                    channels= self.hp.CFM.Size,
-                    num_head= self.hp.CFM.UNet.Transformer.Head,
-                    ffn_kernel_size= self.hp.CFM.UNet.Transformer.FFN.Kernel_Size,
-                    ffn_dropout_rate= self.hp.CFM.UNet.Transformer.FFN.Dropout_Rate,
+                    channels= self.hp.RectifiedFlow.Size,
+                    num_head= self.hp.RectifiedFlow.UNet.Transformer.Head,
+                    ffn_kernel_size= self.hp.RectifiedFlow.UNet.Transformer.FFN.Kernel_Size,
+                    ffn_dropout_rate= self.hp.RectifiedFlow.UNet.Transformer.FFN.Dropout_Rate,
                     norm_type= Norm_Type.LayerNorm
                     )
-                for index in range(self.hp.CFM.UNet.Transformer.Stack)
+                for index in range(self.hp.RectifiedFlow.UNet.Transformer.Stack)
                 ])
             downsample_block = Downsample(
-                in_channels= self.hp.CFM.Size,
-                out_channels= self.hp.CFM.Size,
-                kernel_size= self.hp.CFM.UNet.Kernel_Size + (unet_index < self.hp.CFM.UNet.Rescale_Stack - 1),
-                scale_factor= 2 if unet_index < self.hp.CFM.UNet.Rescale_Stack - 1 else 1
+                in_channels= self.hp.RectifiedFlow.Size,
+                out_channels= self.hp.RectifiedFlow.Size,
+                kernel_size= self.hp.RectifiedFlow.UNet.Kernel_Size + (unet_index < self.hp.RectifiedFlow.UNet.Rescale_Stack - 1),
+                scale_factor= 2 if unet_index < self.hp.RectifiedFlow.UNet.Rescale_Stack - 1 else 1
                 )
 
             self.down_blocks.append(torch.nn.ModuleList([
@@ -254,23 +255,23 @@ class Network(torch.nn.Module):
                 downsample_block
                 ]))
             
-        for unet_index in range(self.hp.CFM.UNet.Mid_Stack):
+        for unet_index in range(self.hp.RectifiedFlow.UNet.Mid_Stack):
             resnet_block = ResnetBlock(
-                in_channels= self.hp.CFM.Size,
-                out_channels= self.hp.CFM.Size,
-                kernel_size= self.hp.CFM.UNet.Kernel_Size,
-                groups= self.hp.CFM.UNet.Groups,
-                step_channels= self.hp.CFM.Size
+                in_channels= self.hp.RectifiedFlow.Size,
+                out_channels= self.hp.RectifiedFlow.Size,
+                kernel_size= self.hp.RectifiedFlow.UNet.Kernel_Size,
+                groups= self.hp.RectifiedFlow.UNet.Groups,
+                step_channels= self.hp.RectifiedFlow.Size
                 )
             transformer_blocks = torch.nn.ModuleList([
                 FFT_Block(
-                    channels= self.hp.CFM.Size,
-                    num_head= self.hp.CFM.UNet.Transformer.Head,
-                    ffn_kernel_size= self.hp.CFM.UNet.Transformer.FFN.Kernel_Size,
-                    ffn_dropout_rate= self.hp.CFM.UNet.Transformer.FFN.Dropout_Rate,
+                    channels= self.hp.RectifiedFlow.Size,
+                    num_head= self.hp.RectifiedFlow.UNet.Transformer.Head,
+                    ffn_kernel_size= self.hp.RectifiedFlow.UNet.Transformer.FFN.Kernel_Size,
+                    ffn_dropout_rate= self.hp.RectifiedFlow.UNet.Transformer.FFN.Dropout_Rate,
                     norm_type= Norm_Type.LayerNorm
                     )
-                for index in range(self.hp.CFM.UNet.Transformer.Stack)
+                for index in range(self.hp.RectifiedFlow.UNet.Transformer.Stack)
                 ])
 
             self.mid_blocks.append(torch.nn.ModuleList([
@@ -278,29 +279,29 @@ class Network(torch.nn.Module):
                 transformer_blocks,
                 ]))
             
-        for unet_index in range(self.hp.CFM.UNet.Rescale_Stack):
+        for unet_index in range(self.hp.RectifiedFlow.UNet.Rescale_Stack):
             resnet_block = ResnetBlock(
-                in_channels= self.hp.CFM.Size * 2,  # concat with downsample
-                out_channels= self.hp.CFM.Size,
-                kernel_size= self.hp.CFM.UNet.Kernel_Size,
-                groups= self.hp.CFM.UNet.Groups,
-                step_channels= self.hp.CFM.Size
+                in_channels= self.hp.RectifiedFlow.Size * 2,  # concat with downsample
+                out_channels= self.hp.RectifiedFlow.Size,
+                kernel_size= self.hp.RectifiedFlow.UNet.Kernel_Size,
+                groups= self.hp.RectifiedFlow.UNet.Groups,
+                step_channels= self.hp.RectifiedFlow.Size
                 )
             transformer_blocks = torch.nn.ModuleList([
                 FFT_Block(
-                    channels= self.hp.CFM.Size,
-                    num_head= self.hp.CFM.UNet.Transformer.Head,
-                    ffn_kernel_size= self.hp.CFM.UNet.Transformer.FFN.Kernel_Size,
-                    ffn_dropout_rate= self.hp.CFM.UNet.Transformer.FFN.Dropout_Rate,
+                    channels= self.hp.RectifiedFlow.Size,
+                    num_head= self.hp.RectifiedFlow.UNet.Transformer.Head,
+                    ffn_kernel_size= self.hp.RectifiedFlow.UNet.Transformer.FFN.Kernel_Size,
+                    ffn_dropout_rate= self.hp.RectifiedFlow.UNet.Transformer.FFN.Dropout_Rate,
                     norm_type= Norm_Type.LayerNorm
                     )
-                for index in range(self.hp.CFM.UNet.Transformer.Stack)
+                for index in range(self.hp.RectifiedFlow.UNet.Transformer.Stack)
                 ])
             upsample_block = Upsample(
-                in_channels= self.hp.CFM.Size,
-                out_channels= self.hp.CFM.Size,
-                kernel_size= self.hp.CFM.UNet.Kernel_Size + (unet_index < self.hp.CFM.UNet.Rescale_Stack - 1),
-                scale_factor= 2 if unet_index < self.hp.CFM.UNet.Rescale_Stack - 1 else 1
+                in_channels= self.hp.RectifiedFlow.Size,
+                out_channels= self.hp.RectifiedFlow.Size,
+                kernel_size= self.hp.RectifiedFlow.UNet.Kernel_Size + (unet_index < self.hp.RectifiedFlow.UNet.Rescale_Stack - 1),
+                scale_factor= 2 if unet_index < self.hp.RectifiedFlow.UNet.Rescale_Stack - 1 else 1
                 )
 
             self.up_blocks.append(torch.nn.ModuleList([
@@ -311,17 +312,17 @@ class Network(torch.nn.Module):
 
         self.projection = torch.nn.Sequential(
             Conv_Init(torch.nn.Conv1d(
-                in_channels= self.hp.CFM.Size,
-                out_channels= self.hp.CFM.Size,
+                in_channels= self.hp.RectifiedFlow.Size,
+                out_channels= self.hp.RectifiedFlow.Size,
                 kernel_size= 1
                 ), w_init_gain= 'gelu'),
             torch.nn.GroupNorm(
-                num_groups= self.hp.CFM.UNet.Groups,
-                num_channels= self.hp.CFM.Size,
+                num_groups= self.hp.RectifiedFlow.UNet.Groups,
+                num_channels= self.hp.RectifiedFlow.Size,
                 ),
             torch.nn.GELU(approximate= 'tanh'),
             Conv_Init(torch.nn.Conv1d(
-                in_channels= self.hp.CFM.Size,
+                in_channels= self.hp.RectifiedFlow.Size,
                 out_channels= self.hp.Sound.N_Mel,
                 kernel_size= 1), w_init_gain= 'zero'),
             )
@@ -338,10 +339,10 @@ class Network(torch.nn.Module):
         encodings: [Batch, Enc_d, Dec_t]
         timesteps: [Batch]
         '''
-        assert noised_mels.size(2) % 2 ** (self.hp.CFM.UNet.Rescale_Stack - 1) == 0, \
-            f'input size must be dividable by \'2 ** (self.hp.CFM.UNet.Rescale_Stack - 1)\': {noised_mels.size(2)}'
-        assert encodings.size(2) % 2 ** (self.hp.CFM.UNet.Rescale_Stack - 1) == 0, \
-            f'input size must be dividable by \'2 ** (self.hp.CFM.UNet.Rescale_Stack - 1)\': {encodings.size(2)}'
+        assert noised_mels.size(2) % 2 ** (self.hp.RectifiedFlow.UNet.Rescale_Stack - 1) == 0, \
+            f'input size must be dividable by \'2 ** (self.hp.RectifiedFlow.UNet.Rescale_Stack - 1)\': {noised_mels.size(2)}'
+        assert encodings.size(2) % 2 ** (self.hp.RectifiedFlow.UNet.Rescale_Stack - 1) == 0, \
+            f'input size must be dividable by \'2 ** (self.hp.RectifiedFlow.UNet.Rescale_Stack - 1)\': {encodings.size(2)}'
 
         x = torch.cat(
             [

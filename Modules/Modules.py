@@ -5,6 +5,7 @@ from typing import Union, List, Optional, Tuple
 
 from .Layer import Conv_Init, Embedding_Initialize_, FFT_Block, Norm_Type, Lambda
 from .RectifiedFlow_F0 import RectifiedFlow as F0_Predictor
+from .RectifiedFlow import RectifiedFlow as Mel_Predictor
 
 class TechSinger_Linear(torch.nn.Module):
     def __init__(
@@ -35,6 +36,7 @@ class TechSinger_Linear(torch.nn.Module):
         self.tech_weight.data.uniform_(-weight_variance, weight_variance)
         
         self.prior_encoder = Prior_Encoder(self.hp)
+        self.mel_predictor = Mel_Predictor(self.hp)
 
     def forward(
         self,
@@ -78,13 +80,32 @@ class TechSinger_Linear(torch.nn.Module):
         prediction_techs = self.tech_predictor(encodings, mel_lengths)
         techs = torch.einsum('bnt,ne->bet', techs.float(), self.tech_weight)
         
-        prediction_mels = self.prior_encoder(
+        prediction_mels_linear = self.prior_encoder(
             encodings= encodings + f0_encodings + techs,
             lengths= mel_lengths
             )
 
+        prediction_mels_linear_padding = torch.nn.functional.pad(
+            input= prediction_mels_linear,
+            pad= [0, self.hp.Train.Pattern_Length.Max - prediction_mels_linear.size(2)]
+            )
+        normalized_mels_padding = torch.nn.functional.pad(
+            input= normalized_mels,
+            pad= [0, self.hp.Train.Pattern_Length.Max - normalized_mels.size(2)]
+            )
+
+        mel_flows_padding, prediction_mel_flows_padding = self.mel_predictor(
+            encodings= prediction_mels_linear_padding,
+            mels= normalized_mels_padding,
+            lengths= mel_lengths
+            )
+        
+        mel_flows = mel_flows_padding[:, :, :normalized_mels.size(2)]
+        prediction_mel_flows = prediction_mel_flows_padding[:, :, :normalized_mels.size(2)]
+
         return \
-            normalized_mels, prediction_mels, \
+            normalized_mels, prediction_mels_linear, \
+            mel_flows, prediction_mel_flows, \
             f0_flows, prediction_f0_flows, \
             prediction_techs, cross_attention_alignments
     
@@ -133,10 +154,22 @@ class TechSinger_Linear(torch.nn.Module):
         techs = (techs > 0.0).float()
         techs = torch.einsum('bnt,ne->bet', techs, self.tech_weight)
         
-        prediction_mels = self.prior_encoder(
+        prediction_mels_linear = self.prior_encoder(
             encodings= encodings + f0_encodings + techs,
             lengths= mel_lengths
             )
+        actual_length = prediction_mels_linear.size(2)
+        padded_length = math.ceil(actual_length / (2 ** self.hp.RectifiedFlow.UNet.Rescale_Stack)) * (2 ** self.hp.RectifiedFlow.UNet.Rescale_Stack)
+        prediction_mels_linear_padded = torch.nn.functional.pad(
+            prediction_mels_linear,
+            pad= [0, padded_length - actual_length]
+            )
+        prediction_mels_padded = self.mel_predictor.Inference(
+            encodings= prediction_mels_linear_padded,
+            lengths= mel_lengths,
+            steps= rectifiedflow_steps
+            )
+        prediction_mels = prediction_mels_padded[:, :, :actual_length]
         prediction_mels = prediction_mels * self.mel_std + self.mel_mean
 
         return prediction_mels, f0s, cross_attention_alignments

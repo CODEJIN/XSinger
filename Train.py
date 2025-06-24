@@ -254,9 +254,10 @@ class Trainer:
         ):
         loss_dict = {}
         with self.accelerator.accumulate(self.model_dict['TechSinger_Linear']):
-            target_mels, prediction_mels, \
+            target_mels, prediction_mels_linear, \
+            mel_flows, prediction_mel_flows, \
             f0_flows, prediction_f0_flows, \
-            prediction_techs, cross_attention_alignments = self.model_dict['TechSinger_Linear'](
+            prediction_techs, _ = self.model_dict['TechSinger_Linear'](
                 tokens= tokens,
                 languages= languages,
                 token_lengths= token_lengths,
@@ -277,9 +278,13 @@ class Trainer:
                 ).to(mels.device)).float()
             
             loss_dict['Encoding'] = (self.criterion_dict['MSE'](
-                prediction_mels,
+                prediction_mels_linear,
                 target_mels,
-                ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
+                ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels_linear.size(1)
+            loss_dict['RectifiedFlow_Mel'] = (self.criterion_dict['MSE'](
+                prediction_mel_flows,
+                mel_flows,
+                ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / mel_flows.size(1)
             loss_dict['RectifiedFlow_F0'] = (self.criterion_dict['MSE'](
                 prediction_f0_flows,
                 f0_flows,
@@ -298,6 +303,7 @@ class Trainer:
             
             self.optimizer_dict['TechSinger_Linear'].zero_grad()
             self.accelerator.backward(
+                loss_dict['RectifiedFlow_Mel'] +
                 loss_dict['RectifiedFlow_F0'] +
                 loss_dict['Encoding'] +
                 # loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention +
@@ -398,6 +404,7 @@ class Trainer:
         ):
         loss_dict = {}
         target_mels, prediction_mels, \
+        mel_flows, prediction_mel_flows, \
         f0_flows, prediction_f0_flows, \
         prediction_techs, cross_attention_alignments = self.model_dict['TechSinger_Linear'](
             tokens= tokens,
@@ -423,6 +430,10 @@ class Trainer:
                 prediction_mels,
                 target_mels,
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_mels.size(1)
+        loss_dict['RectifiedFlow_Mel'] = (self.criterion_dict['MSE'](
+            prediction_mel_flows,
+            mel_flows,
+            ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / mel_flows.size(1)
         loss_dict['RectifiedFlow_F0'] = (self.criterion_dict['MSE'](
                 prediction_f0_flows,
                 f0_flows,

@@ -1699,3 +1699,6 @@ if __name__ == '__main__':
 #     -kiritan /mnt/f/Rawdata_Music/Kiritan \
 #     -ofuton /mnt/f/Rawdata_Music/OFUTON_P_UTAGOE_DB \
 #     -gtsinger /mnt/e/GTSinger
+
+# python -m Pattern.Generator -hp Hyper_Parameters.yaml \
+#     -csd /nas/SW/heejo.you/rawdata_music/CSD_1.1

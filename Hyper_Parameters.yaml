@@ -67,20 +67,32 @@ Prior_Encoder:
     Kernel_Size: 5
     Projection_Kernel_Size: 3
     
-# CFM:
-#     Size: 512
-#     Scheduler: 'Uniform' # 'Cosmap'
-#     Transformer:
-#         Stack: 6
-#         Head: 2
-#         Dropout_Rate: 0.1
-#         FFN:
-#             Kernel_Size: 3
-#             Dropout_Rate: 0.1
-#     Use_OT: true
-#     Use_CFG: true
+RectifiedFlow:
+    Size: 512
+    Scheduler: 'Uniform' # 'Cosmap'
+    UNet:
+        Rescale_Stack: 2
+        Mid_Stack: 2
+        Kernel_Size: 3
+        Groups: 8            
+        Transformer:
+            Stack: 1
+            Head: 4
+            Dropout_Rate: 0.1
+            FFN:
+                Kernel_Size: 3
+                Dropout_Rate: 0.1    
+    Transformer:
+        Stack: 6
+        Head: 2
+        Dropout_Rate: 0.1
+        FFN:
+            Kernel_Size: 3
+            Dropout_Rate: 0.1
+    Use_OT: true
+    Use_CFG: true
 
-Dataset_Path: '/mnt/d/Datasets/44K.TechSinger'
+Dataset_Path: '/nas/SW/heejo.you/Datasets/44K.TechSinger'
 Token_Path: 'Token.yaml'
 Mel_Info_Path: 'Mel_Info.yaml'
 F0_Info_Path: 'F0_Info.yaml'
@@ -97,8 +109,8 @@ Train:
     Num_Workers: 2
     Batch_Size: 8
     Pattern_Length:
-        Min: 384
-        Max: 768
+        Min: 256
+        Max: 1536
     Learning_Rate:
         Initial: 1.0e-4
         Decay: 0.999875
