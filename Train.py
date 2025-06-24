@@ -257,7 +257,7 @@ class Trainer:
             target_mels, prediction_mels_linear, \
             mel_flows, prediction_mel_flows, \
             f0_flows, prediction_f0_flows, \
-            prediction_techs, _ = self.model_dict['TechSinger_Linear'](
+            prediction_techs, prediction_tokens = self.model_dict['TechSinger_Linear'](
                 tokens= tokens,
                 languages= languages,
                 token_lengths= token_lengths,
@@ -289,24 +289,23 @@ class Trainer:
                 prediction_f0_flows,
                 f0_flows,
                 ) * mel_float_masks).sum() / mel_float_masks.sum() / prediction_f0_flows.size(1)            
-            # loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
-            #     alignments= cross_attention_alignments,
-            #     token_on_note_lengths= token_on_note_lengths,
-            #     note_durations = durations
-            #     # query_lengths= mel_lengths,
-            #     # key_lengths= token_lengths
-            #     )
             loss_dict['Tech'] = (self.criterion_dict['BCE'](
                 prediction_techs,
                 techs.to(dtype= prediction_techs.dtype),
                 ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_techs.size(1)
+            loss_dict['Token'] = self.criterion_dict['TokenCTC'](
+                log_probs= prediction_tokens.permute(2, 0, 1),  # [Latent_t, Batch, Token_n]
+                targets= tokens,
+                input_lengths= mel_lengths,
+                target_lengths= token_lengths
+                )
             
             self.optimizer_dict['TechSinger_Linear'].zero_grad()
             self.accelerator.backward(
                 loss_dict['RectifiedFlow_Mel'] +
                 loss_dict['RectifiedFlow_F0'] +
                 loss_dict['Encoding'] +
-                # loss_dict['Cross_Attention'] * self.hp.Train.Learning_Rate.Lambda.Cross_Attention +
+                loss_dict['Token'] +
                 loss_dict['Tech']
                 )
 
@@ -406,7 +405,7 @@ class Trainer:
         target_mels, prediction_mels, \
         mel_flows, prediction_mel_flows, \
         f0_flows, prediction_f0_flows, \
-        prediction_techs, cross_attention_alignments = self.model_dict['TechSinger_Linear'](
+        prediction_techs, prediction_tokens = self.model_dict['TechSinger_Linear'](
             tokens= tokens,
             languages= languages,
             token_lengths= token_lengths,
@@ -438,17 +437,16 @@ class Trainer:
                 prediction_f0_flows,
                 f0_flows,
                 ) * mel_float_masks).sum() / mel_float_masks.sum() / prediction_f0_flows.size(1)            
-        # loss_dict['Cross_Attention'] = self.criterion_dict['GA'](
-        #     alignments= cross_attention_alignments,
-        #     token_on_note_lengths= token_on_note_lengths,
-        #     note_durations = durations
-        #     # query_lengths= mel_lengths,
-        #     # key_lengths= token_lengths
-        #     )
         loss_dict['Tech'] = (self.criterion_dict['BCE'](
             prediction_techs,
             techs.to(dtype= prediction_techs.dtype),
             ) * mel_float_masks[:, None, :]).sum() / mel_float_masks.sum() / prediction_techs.size(1)
+        loss_dict['Token'] = self.criterion_dict['TokenCTC'](
+            log_probs= prediction_tokens.permute(2, 0, 1),  # [Latent_t, Batch, Token_n]
+            targets= tokens,
+            input_lengths= mel_lengths,
+            target_lengths= token_lengths
+            )
         
         for tag, loss in loss_dict.items():
             self.scalar_dict['Evaluation']['Loss/{}'.format(tag)] += loss.item()

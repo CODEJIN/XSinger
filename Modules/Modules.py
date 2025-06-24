@@ -38,6 +38,8 @@ class TechSinger_Linear(torch.nn.Module):
         self.prior_encoder = Prior_Encoder(self.hp)
         self.mel_predictor = Mel_Predictor(self.hp)
 
+        self.token_predictor = Token_Predictor(self.hp)
+
     def forward(
         self,
         tokens: torch.IntTensor,
@@ -84,6 +86,10 @@ class TechSinger_Linear(torch.nn.Module):
             encodings= encodings + f0_encodings + techs,
             lengths= mel_lengths
             )
+        
+        prediction_tokens = self.token_predictor(
+            encodings= prediction_mels
+            )
 
         prediction_mels_linear_padding = torch.nn.functional.pad(
             input= prediction_mels_linear,
@@ -107,7 +113,7 @@ class TechSinger_Linear(torch.nn.Module):
             normalized_mels, prediction_mels_linear, \
             mel_flows, prediction_mel_flows, \
             f0_flows, prediction_f0_flows, \
-            prediction_techs, cross_attention_alignments
+            prediction_techs, prediction_tokens
     
     def Inference(
         self,
@@ -120,7 +126,8 @@ class TechSinger_Linear(torch.nn.Module):
         note_lengths: torch.IntTensor,
         singers: torch.IntTensor,
         mel_lengths: torch.IntTensor,
-        rectifiedflow_steps: int= 100
+        rectifiedflow_steps: int= 100,
+        use_f0_bound: bool= False
         ):
         encodings, singers, cross_attention_alignments, notes_expanded = self.encoder(
             tokens= tokens,
@@ -139,12 +146,12 @@ class TechSinger_Linear(torch.nn.Module):
             steps= rectifiedflow_steps
             )        
         f0s = (normalized_f0s * self.f0_std + self.f0_mean).clamp_min(0.0)
-        # need dynamic clipping
-        f0s_lower_bound = (440 * 2 ** ((notes_expanded - 3 - 69) / 12))
-        f0s_lower_bound = torch.where(notes_expanded > 0, f0s_lower_bound, torch.zeros_like(f0s_lower_bound))
-        f0s_upper_bound = 440 * 2 ** ((notes_expanded + 3 - 69) / 12)
-        f0s = torch.where(f0s < f0s_lower_bound, f0s_lower_bound, f0s)
-        f0s = torch.where(f0s > f0s_upper_bound, f0s_upper_bound, f0s)                
+        if use_f0_bound:    # need dynamic clipping
+            f0s_lower_bound = (440 * 2 ** ((notes_expanded - 3 - 69) / 12))
+            f0s_lower_bound = torch.where(notes_expanded > 0, f0s_lower_bound, torch.zeros_like(f0s_lower_bound))
+            f0s_upper_bound = 440 * 2 ** ((notes_expanded + 3 - 69) / 12)
+            f0s = torch.where(f0s < f0s_lower_bound, f0s_lower_bound, f0s)
+            f0s = torch.where(f0s > f0s_upper_bound, f0s_upper_bound, f0s)
         f0s_coarse = self.F0_Coarse(
             f0s= f0s
             )   # [Batch, Dec_t]
@@ -547,6 +554,46 @@ class Tech_Predictor(torch.nn.Module):
 
         return techs
 
+class Token_Predictor(torch.nn.Module):
+    def __init__(
+        self,
+        hyper_parameters: Namespace
+        ):
+        super().__init__()
+        self.hp = hyper_parameters
+        
+        self.lstm = torch.nn.LSTM(
+            input_size= self.hp.Sound.N_Mel,
+            hidden_size= self.hp.Token_Predictor.Size,
+            num_layers= self.hp.Token_Predictor.LSTM.Stack,
+            )
+        self.lstm_dropout = torch.nn.Dropout(
+            p= self.hp.Token_Predictor.LSTM.Dropout_Rate,
+            )
+
+        self.projection = Conv_Init(torch.nn.Conv1d(
+            in_channels= self.hp.Token_Predictor.Size,
+            out_channels= self.hp.Tokens + 1,
+            kernel_size= 1,
+            ), w_init_gain= 'linear')
+            
+    def forward(
+        self,
+        encodings: torch.Tensor,
+        ) -> torch.Tensor:
+        '''
+        features: [Batch, Feature_d, Feature_t], Spectrogram
+        lengths: [Batch]
+        '''
+        encodings = encodings.permute(2, 0, 1)    # [Feature_t, Batch, Enc_d]
+        
+        self.lstm.flatten_parameters()
+        encodings = self.lstm(encodings)[0] # [Feature_t, Batch, LSTM_d]
+        
+        predictions = self.projection(encodings.permute(1, 2, 0))
+        predictions = torch.nn.functional.log_softmax(predictions, dim= 1)
+
+        return predictions
 
 class Prior_Encoder(torch.nn.Module):
     def __init__(
