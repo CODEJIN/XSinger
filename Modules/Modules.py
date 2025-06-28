@@ -23,6 +23,12 @@ class TechSinger_Linear(torch.nn.Module):
         self.f0_mean = f0_mean
         self.f0_std = f0_std
 
+        # Pre-calculate constants for F0 quantization
+        f0_min_mel = 1127.0 * math.log(1.0 + self.hp.Sound.F0_Min / 700.0)
+        f0_max_mel = 1127.0 * math.log(1.0 + self.hp.Sound.F0_Max / 700.0)
+        self.register_buffer('f0_min_mel', torch.tensor(f0_min_mel))
+        self.register_buffer('f0_max_mel', torch.tensor(f0_max_mel))
+
         self.encoder = Encoder(self.hp)
         self.f0_predictor = F0_Predictor(self.hp)
         self.f0_embedding = torch.nn.Embedding(
@@ -88,16 +94,20 @@ class TechSinger_Linear(torch.nn.Module):
             )
         
         prediction_tokens = self.token_predictor(
-            encodings= prediction_mels
+            encodings= prediction_mels_linear
             )
+
+        current_max_length = prediction_mels_linear.size(2)
+        downsample_factor = 2 ** (self.hp.RectifiedFlow.UNet.Rescale_Stack - 1)
+        padded_length = math.ceil(current_max_length / downsample_factor) * downsample_factor
 
         prediction_mels_linear_padding = torch.nn.functional.pad(
             input= prediction_mels_linear,
-            pad= [0, self.hp.Train.Pattern_Length.Max - prediction_mels_linear.size(2)]
+            pad= [0, padded_length - current_max_length]
             )
         normalized_mels_padding = torch.nn.functional.pad(
             input= normalized_mels,
-            pad= [0, self.hp.Train.Pattern_Length.Max - normalized_mels.size(2)]
+            pad= [0, padded_length - current_max_length]
             )
 
         mel_flows_padding, prediction_mel_flows_padding = self.mel_predictor(
@@ -147,11 +157,15 @@ class TechSinger_Linear(torch.nn.Module):
             )        
         f0s = (normalized_f0s * self.f0_std + self.f0_mean).clamp_min(0.0)
         if use_f0_bound:    # need dynamic clipping
-            f0s_lower_bound = (440 * 2 ** ((notes_expanded - 3 - 69) / 12))
-            f0s_lower_bound = torch.where(notes_expanded > 0, f0s_lower_bound, torch.zeros_like(f0s_lower_bound))
-            f0s_upper_bound = 440 * 2 ** ((notes_expanded + 3 - 69) / 12)
-            f0s = torch.where(f0s < f0s_lower_bound, f0s_lower_bound, f0s)
-            f0s = torch.where(f0s > f0s_upper_bound, f0s_upper_bound, f0s)
+            voiced_mask = notes_expanded > 0
+            
+            f0s_lower_bound = torch.zeros_like(f0s)
+            f0s_lower_bound[voiced_mask] = (440 * 2 ** ((notes_expanded[voiced_mask] - 3 - 69) / 12))
+            
+            f0s_upper_bound = torch.full_like(f0s, float('inf'))
+            f0s_upper_bound[voiced_mask] = (440 * 2 ** ((notes_expanded[voiced_mask] + 3 - 69) / 12))
+
+            f0s = torch.clamp(f0s, min=f0s_lower_bound, max=f0s_upper_bound)
         f0s_coarse = self.F0_Coarse(
             f0s= f0s
             )   # [Batch, Dec_t]
@@ -166,7 +180,8 @@ class TechSinger_Linear(torch.nn.Module):
             lengths= mel_lengths
             )
         actual_length = prediction_mels_linear.size(2)
-        padded_length = math.ceil(actual_length / (2 ** self.hp.RectifiedFlow.UNet.Rescale_Stack)) * (2 ** self.hp.RectifiedFlow.UNet.Rescale_Stack)
+        downsample_factor = 2 ** (self.hp.RectifiedFlow.UNet.Rescale_Stack - 1)
+        padded_length = math.ceil(actual_length / downsample_factor) * downsample_factor
         prediction_mels_linear_padded = torch.nn.functional.pad(
             prediction_mels_linear,
             pad= [0, padded_length - actual_length]
@@ -185,11 +200,9 @@ class TechSinger_Linear(torch.nn.Module):
         self,
         f0s: torch.FloatTensor
         ) -> torch.IntTensor:
-        f0_min_mel = 1127.0 * math.log(1.0 + self.hp.Sound.F0_Min / 700.0)
-        f0_max_mel = 1127.0 * math.log(1.0 + self.hp.Sound.F0_Max / 700.0)        
         f0s_mel = 1127.0 * (1.0 + f0s / 700.0).log()
         
-        f0s_mel[f0s_mel > 0.0] = (f0s_mel[f0s_mel > 0.0] - f0_min_mel) / (f0_max_mel - f0_min_mel) * (self.hp.F0_Predictor.Coarse_Bin - 1)  # 0 to Bin-1
+        f0s_mel[f0s_mel > 0.0] = (f0s_mel[f0s_mel > 0.0] - self.f0_min_mel) / (self.f0_max_mel - self.f0_min_mel) * (self.hp.F0_Predictor.Coarse_Bin - 1)  # 0 to Bin-1
         f0s_mel = f0s_mel.clamp(min= 0.0, max= self.hp.F0_Predictor.Coarse_Bin - 1)
         
         f0s_coarse = (f0s_mel + 0.5).int()

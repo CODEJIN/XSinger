@@ -105,8 +105,11 @@ class RectifiedFlow(torch.nn.Module):
                     steps= timesteps_double
                     )
                 # Split outputs and apply CFG
-                network_outputs, network_outputs_without_condition = network_outputs_double.chunk(2, dim=0)
-                network_outputs = network_outputs + cfg_guidance_scale * (network_outputs - network_outputs_without_condition)
+                network_outputs_with_condition, network_outputs_without_condition = network_outputs_double.chunk(2, dim=0)
+                network_outputs_with_condition = network_outputs_with_condition + cfg_guidance_scale * (network_outputs_with_condition - network_outputs_without_condition)
+
+                # Combine the guided flow for the conditional part and the original flow for the unconditional part
+                network_outputs_double = torch.cat([network_outputs_with_condition, network_outputs_without_condition], dim=0)
 
                 # Update x_double for the next step
                 x_double = x_double + delta_timesteps_double[:, None] * network_outputs_double # Euler update
@@ -153,15 +156,11 @@ class RectifiedFlow(torch.nn.Module):
             reg= reg
             )
         probabilities = ot_maps / ot_maps.sum(dim= 0, keepdim= True)
-        noise_indices = torch.cat([
-            torch.multinomial(
-                probability,
-                num_samples= 1,
-                replacement= True
-                )
-            for probability in probabilities.T
-            ])
-
+        noise_indices = torch.multinomial(
+            probabilities.T,
+            num_samples= 1,
+            replacement= True
+            )[:, 0]
         sampled_noises = noises[noise_indices]
 
         return sampled_noises
@@ -342,4 +341,3 @@ def Fused_Gate(x):
     x = x_tanh.tanh() * x_sigmoid.sigmoid()
 
     return x
-

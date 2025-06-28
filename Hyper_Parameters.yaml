@@ -98,7 +98,7 @@ RectifiedFlow:
     Use_OT: true
     Use_CFG: true
 
-Dataset_Path: '/nas/SW/heejo.you/Datasets/44K.TechSinger'
+Dataset_Path: '/mnt/d/Datasets/44K.TechSinger'
 Token_Path: 'Token.yaml'
 Mel_Info_Path: 'Mel_Info.yaml'
 F0_Info_Path: 'F0_Info.yaml'
